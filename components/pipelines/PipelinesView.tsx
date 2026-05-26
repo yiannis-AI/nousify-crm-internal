@@ -133,7 +133,7 @@ function handleAddLead(leadId: string) {
   return (
     <div className="flex flex-col h-full">
       {/* Page header */}
-      <div className="px-8 pt-8 pb-5 flex items-start justify-between">
+      <div className="px-8 pt-8 pb-5 flex items-center justify-between">
         <div>
           <h1 className="text-xl font-semibold text-gray-900">Pipelines</h1>
           <p className="text-sm text-gray-500 mt-1">Manage and visualise your sales pipelines.</p>
@@ -165,14 +165,8 @@ function handleAddLead(leadId: string) {
           </div>
           <p className="text-sm font-medium text-gray-700">No pipelines yet</p>
           <p className="text-sm text-gray-400 mt-1 max-w-xs">
-            Create your first pipeline to start tracking leads through stages.
+            Click &quot;New pipeline&quot; to start tracking leads through stages.
           </p>
-          <button
-            onClick={() => setShowCreatePipeline(true)}
-            className="mt-4 text-sm font-medium text-gray-900 underline underline-offset-2 hover:text-gray-600"
-          >
-            Create pipeline
-          </button>
         </div>
       ) : (
         <>
@@ -237,13 +231,7 @@ function handleAddLead(leadId: string) {
             {stages.length === 0 ? (
               <div className="flex flex-col items-center justify-center h-full text-center">
                 <p className="text-sm font-medium text-gray-700">No stages yet</p>
-                <p className="text-sm text-gray-400 mt-1">Add stages to start placing leads on the board.</p>
-                <button
-                  onClick={() => setShowManageStages(true)}
-                  className="mt-4 text-sm font-medium text-gray-900 underline underline-offset-2 hover:text-gray-600"
-                >
-                  Manage stages
-                </button>
+                <p className="text-sm text-gray-400 mt-1">Click &quot;Configure&quot; to add stages and start placing leads on the board.</p>
               </div>
             ) : (
               <PipelineBoard

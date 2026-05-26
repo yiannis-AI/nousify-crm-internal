@@ -31,6 +31,27 @@ const defaultColors: Record<string, string> = {
   converted: 'bg-purple-50 text-purple-700',
 }
 
+const CLIENT_STATUS_STYLES: Record<string, string> = {
+  active:   'bg-emerald-50 text-emerald-700',
+  at_risk:  'bg-amber-50 text-amber-700',
+  churned:  'bg-red-50 text-red-700',
+}
+
+const CLIENT_STATUS_LABELS: Record<string, string> = {
+  active:  'Active',
+  at_risk: 'At Risk',
+  churned: 'Churned',
+}
+
+export function ClientStatusBadge({ status }: { status: string }) {
+  if (!status) return <span className="text-gray-300 text-xs">—</span>
+  return (
+    <span className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium ${CLIENT_STATUS_STYLES[status] ?? 'bg-gray-100 text-gray-600'}`}>
+      {CLIENT_STATUS_LABELS[status] ?? status}
+    </span>
+  )
+}
+
 export function Badge({ label, color }: BadgeProps) {
   const key = label.toLowerCase().replace(/\s+/g, '_')
   const preset = defaultColors[key]

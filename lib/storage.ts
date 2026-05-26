@@ -1,5 +1,5 @@
 import { v4 as uuidv4 } from 'uuid'
-import type { Lead, LeadFormData, CustomFieldDefinition, Pipeline, PipelineStage, PipelineEntry, ActivityEntry, ActivityEntryFormData } from '@/types'
+import type { Lead, LeadFormData, CustomFieldDefinition, Pipeline, PipelineStage, PipelineEntry, ActivityEntry, ActivityEntryFormData, Client, ClientFormData, AppSettings } from '@/types'
 
 const KEYS = {
   leads: 'crm_leads',
@@ -8,6 +8,9 @@ const KEYS = {
   pipelineStages: 'crm_pipeline_stages',
   pipelineEntries: 'crm_pipeline_entries',
   activityEntries: 'crm_activity_entries',
+  clients: 'crm_clients',
+  clientCustomFields: 'crm_client_custom_fields',
+  settings: 'crm_settings',
 }
 
 export interface StorageAdapter {
@@ -36,6 +39,15 @@ export interface StorageAdapter {
   updateActivityEntry(id: string, data: Partial<ActivityEntryFormData>): ActivityEntry
   deleteActivityEntry(id: string): void
   deleteActivityEntriesForLead(leadId: string): void
+  getClients(): Client[]
+  createClient(data: Omit<Client, 'id' | 'createdAt' | 'updatedAt'>): Client
+  updateClient(id: string, data: Partial<Omit<ClientFormData, 'leadId'>>): Client
+  deleteClient(id: string): void
+  getClientByLeadId(leadId: string): Client | undefined
+  getClientCustomFields(): CustomFieldDefinition[]
+  saveClientCustomFields(fields: CustomFieldDefinition[]): void
+  getSettings(): AppSettings
+  saveSettings(settings: AppSettings): void
 }
 
 function readJSON<T>(key: string, fallback: T): T {
@@ -79,6 +91,8 @@ export const localStorageAdapter: StorageAdapter = {
     writeJSON(KEYS.leads, leads)
     this.removeLeadFromAllPipelines(id)
     this.deleteActivityEntriesForLead(id)
+    const client = this.getClientByLeadId(id)
+    if (client) writeJSON(KEYS.clients, this.getClients().filter((c) => c.id !== client.id))
   },
 
   getCustomFields() {
@@ -247,6 +261,57 @@ export const localStorageAdapter: StorageAdapter = {
   deleteActivityEntriesForLead(leadId) {
     const entries = readJSON<ActivityEntry[]>(KEYS.activityEntries, [])
     writeJSON(KEYS.activityEntries, entries.filter((e) => e.leadId !== leadId))
+  },
+
+  getClients() {
+    return readJSON<Client[]>(KEYS.clients, [])
+  },
+
+  createClient(data) {
+    const clients = this.getClients()
+    const now = new Date().toISOString()
+    const client: Client = { ...data, customFields: data.customFields ?? {}, id: uuidv4(), createdAt: now, updatedAt: now }
+    writeJSON(KEYS.clients, [...clients, client])
+    this.updateLead(data.leadId, { isClient: true })
+    return client
+  },
+
+  updateClient(id, data) {
+    const clients = this.getClients()
+    const index = clients.findIndex((c) => c.id === id)
+    if (index === -1) throw new Error(`Client ${id} not found`)
+    clients[index] = { ...clients[index], ...data, updatedAt: new Date().toISOString() }
+    writeJSON(KEYS.clients, clients)
+    return clients[index]
+  },
+
+  deleteClient(id) {
+    const clients = this.getClients()
+    const client = clients.find((c) => c.id === id)
+    writeJSON(KEYS.clients, clients.filter((c) => c.id !== id))
+    if (client) {
+      try { this.updateLead(client.leadId, { isClient: false }) } catch { /* lead may be deleted */ }
+    }
+  },
+
+  getClientByLeadId(leadId) {
+    return this.getClients().find((c) => c.leadId === leadId)
+  },
+
+  getClientCustomFields() {
+    return readJSON<CustomFieldDefinition[]>(KEYS.clientCustomFields, [])
+  },
+
+  getSettings() {
+    return readJSON<AppSettings>(KEYS.settings, { currencyCode: 'USD' })
+  },
+
+  saveSettings(settings) {
+    writeJSON(KEYS.settings, settings)
+  },
+
+  saveClientCustomFields(fields) {
+    writeJSON(KEYS.clientCustomFields, fields)
   },
 }
 

@@ -50,3 +50,12 @@ export function createStageChangeEntry(params: {
     systemGenerated: true,
   })
 }
+
+export function createClientConvertedEntry(leadId: string): ActivityEntry {
+  return db.createActivityEntry({
+    leadId,
+    type: 'client_converted',
+    title: 'Converted to client',
+    systemGenerated: true,
+  })
+}

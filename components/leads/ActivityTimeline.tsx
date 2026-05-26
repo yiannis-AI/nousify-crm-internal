@@ -18,6 +18,7 @@ const DOT_COLORS: Record<ActivityEntryType, string> = {
   note: 'bg-blue-400',
   document: 'bg-purple-400',
   stage_change: 'bg-gray-300',
+  client_converted: 'bg-emerald-400',
 }
 
 const TYPE_LABELS: Record<ActivityEntryType, string> = {
@@ -25,6 +26,7 @@ const TYPE_LABELS: Record<ActivityEntryType, string> = {
   note: 'Note',
   document: 'Document',
   stage_change: 'Pipeline update',
+  client_converted: 'Client conversion',
 }
 
 export function ActivityTimeline({ leadId, entries, onEntriesChange }: ActivityTimelineProps) {

@@ -30,6 +30,7 @@ export interface Lead {
   leadQuality: LeadQuality
   notes: string
   customFields: Record<string, string>
+  isClient?: boolean
   createdAt: string
   updatedAt: string
 }
@@ -73,7 +74,7 @@ export interface ActivityAttachment {
   url: string
 }
 
-export type ActivityEntryType = 'note' | 'document' | 'stage_change' | 'lead_created'
+export type ActivityEntryType = 'note' | 'document' | 'stage_change' | 'lead_created' | 'client_converted'
 
 export interface ActivityEntry {
   id: string
@@ -91,3 +92,23 @@ export interface ActivityEntry {
 }
 
 export type ActivityEntryFormData = Pick<ActivityEntry, 'type' | 'title' | 'description' | 'attachment'>
+
+export type ClientStatus = 'active' | 'at_risk' | 'churned'
+
+export interface Client {
+  id: string
+  leadId: string
+  contractValue: string
+  clientSince: string
+  renewalDate: string
+  status: ClientStatus
+  customFields: Record<string, string>
+  createdAt: string
+  updatedAt: string
+}
+
+export type ClientFormData = Omit<Client, 'id' | 'createdAt' | 'updatedAt'>
+
+export interface AppSettings {
+  currencyCode: string
+}

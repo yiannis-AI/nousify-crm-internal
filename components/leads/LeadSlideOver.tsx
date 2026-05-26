@@ -5,6 +5,7 @@ import Link from 'next/link'
 import { SlideOver } from '@/components/ui/SlideOver'
 import { Modal } from '@/components/ui/Modal'
 import { Button } from '@/components/ui/Button'
+import { AddClientModal } from '@/components/clients/AddClientModal'
 import { db } from '@/lib/storage'
 import { createLead, updateLead, emptyLeadForm, findLeadByEmail } from '@/lib/leads'
 import { getPipelines, getStages, getEntries, addLeadToPipeline, moveEntry, removeEntry } from '@/lib/pipelines'
@@ -25,6 +26,7 @@ export function LeadSlideOver({ open, lead, onClose, onSaved }: LeadSlideOverPro
   const [errors, setErrors] = useState<Record<string, string>>({})
   const [duplicateLead, setDuplicateLead] = useState<Lead | null>(null)
   const [showDuplicateConfirm, setShowDuplicateConfirm] = useState(false)
+  const [convertOpen, setConvertOpen] = useState(false)
 
   // Create-mode only: initial note + optional document
   const [initialNote, setInitialNote] = useState('')
@@ -440,11 +442,27 @@ export function LeadSlideOver({ open, lead, onClose, onSaved }: LeadSlideOverPro
           )}
         </div>
 
-        <div className="sticky bottom-0 bg-white border-t border-gray-100 px-6 py-4 flex gap-3 justify-end">
-          <Button variant="secondary" onClick={onClose}>Cancel</Button>
-          <Button onClick={handleSubmit}>{isEdit ? 'Save changes' : 'Create lead'}</Button>
+        <div className="sticky bottom-0 bg-white border-t border-gray-100 px-6 py-4 flex items-center justify-between">
+          {isEdit && !lead?.isClient ? (
+            <Button variant="ghost" size="sm" onClick={() => setConvertOpen(true)}>
+              Convert to client
+            </Button>
+          ) : (
+            <div />
+          )}
+          <div className="flex gap-3">
+            <Button variant="secondary" onClick={onClose}>Cancel</Button>
+            <Button onClick={handleSubmit}>{isEdit ? 'Save changes' : 'Create lead'}</Button>
+          </div>
         </div>
       </SlideOver>
+
+      <AddClientModal
+        open={convertOpen}
+        preselectedLead={lead}
+        onClose={() => setConvertOpen(false)}
+        onAdded={() => { setConvertOpen(false); onClose(); onSaved() }}
+      />
 
       {/* Duplicate confirmation — rendered outside SlideOver so it stacks on top */}
       <Modal
