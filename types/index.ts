@@ -1,11 +1,5 @@
 export type CustomFieldType = 'text' | 'number' | 'date' | 'select'
 
-export interface LeadOption {
-  id: string
-  label: string
-  color?: string
-}
-
 export interface CustomFieldDefinition {
   id: string
   name: string
@@ -37,7 +31,7 @@ export interface Lead {
 
 export type LeadFormData = Omit<Lead, 'id' | 'createdAt' | 'updatedAt'>
 
-export type SortDirection = 'asc' | 'desc'
+type SortDirection = 'asc' | 'desc'
 
 export interface SortConfig {
   key: keyof Lead | string

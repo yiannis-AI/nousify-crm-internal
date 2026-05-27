@@ -1,6 +1,3 @@
-import { db } from './storage'
-import type { AppSettings } from '@/types'
-
 export const CURRENCIES = [
   { code: 'USD', symbol: '$',    label: 'US Dollar (USD)' },
   { code: 'EUR', symbol: '€',    label: 'Euro (EUR)' },
@@ -21,12 +18,4 @@ export const CURRENCIES = [
 
 export function getCurrencySymbol(code: string): string {
   return CURRENCIES.find((c) => c.code === code)?.symbol ?? code
-}
-
-export function getSettings(): AppSettings {
-  return db.getSettings()
-}
-
-export function saveSettings(settings: AppSettings): void {
-  db.saveSettings(settings)
 }

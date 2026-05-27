@@ -1,6 +1,6 @@
 'use client'
 
-import { useState, useEffect, useCallback, useRef } from 'react'
+import { useState, useEffect, useRef } from 'react'
 import { format } from 'date-fns'
 import { Button } from '@/components/ui/Button'
 import { ClientStatusBadge } from '@/components/ui/Badge'
@@ -9,10 +9,8 @@ import { TimelineSlideOver } from '@/components/leads/TimelineSlideOver'
 import { AddClientModal } from './AddClientModal'
 import { ClientSlideOver } from './ClientSlideOver'
 import { ClientsConfigModal } from './ClientsConfigModal'
-import { getClients, deleteClient, updateClient, getClientCustomFields } from '@/lib/clients'
-import { getSettings, getCurrencySymbol } from '@/lib/settings'
-import { getLeadById } from '@/lib/leads'
-import { getActivityEntries } from '@/lib/activities'
+import { deleteClientAction, updateClientAction } from '@/app/actions/clients'
+import { getActivityEntriesAction } from '@/app/actions/activities'
 import type { Client, ClientStatus, Lead, ActivityEntry, CustomFieldDefinition } from '@/types'
 
 const BASE_COLUMNS = [
@@ -25,12 +23,33 @@ const BASE_COLUMNS = [
   { key: 'renewalDate',   label: 'Renewal Date',    visible: true,  locked: false },
 ]
 
+function buildColumns(customFields: CustomFieldDefinition[]) {
+  const cfCols = customFields.map((cf) => ({
+    key: `custom_${cf.id}`, label: cf.name, visible: true, locked: false,
+  }))
+  return [...BASE_COLUMNS, ...cfCols]
+}
+
 type ClientWithLead = Client & { lead: Lead | undefined }
 
-export function ClientsTable() {
-  const [clients, setClients] = useState<ClientWithLead[]>([])
-  const [currencySymbol, setCurrencySymbol] = useState('$')
-  const [columns, setColumns] = useState(BASE_COLUMNS)
+interface ClientsTableProps {
+  initialClients: Client[]
+  initialLeads: Lead[]
+  initialCustomFields: CustomFieldDefinition[]
+  currencySymbol: string
+}
+
+export function ClientsTable({
+  initialClients,
+  initialLeads,
+  initialCustomFields,
+  currencySymbol,
+}: ClientsTableProps) {
+  const [clients, setClients] = useState<Client[]>(initialClients)
+  const [leads, setLeads] = useState<Lead[]>(initialLeads)
+  const [customFields, setCustomFields] = useState<CustomFieldDefinition[]>(initialCustomFields)
+  const [columns, setColumns] = useState(() => buildColumns(initialCustomFields))
+
   const [search, setSearch] = useState('')
   const [filterStatus, setFilterStatus] = useState('')
   const [columnsMenuOpen, setColumnsMenuOpen] = useState(false)
@@ -42,32 +61,21 @@ export function ClientsTable() {
   const [timelineClient, setTimelineClient] = useState<ClientWithLead | null>(null)
   const [timelineEntries, setTimelineEntries] = useState<ActivityEntry[]>([])
 
-  // Bulk selection
   const [selected, setSelected] = useState<Set<string>>(new Set())
   const [bulkDeleteOpen, setBulkDeleteOpen] = useState(false)
   const [bulkStatusOpen, setBulkStatusOpen] = useState(false)
   const [bulkStatus, setBulkStatus] = useState<ClientStatus | ''>('')
   const selectAllRef = useRef<HTMLInputElement>(null)
 
-  const load = useCallback(() => {
-    setCurrencySymbol(getCurrencySymbol(getSettings().currencyCode))
-    const all = getClients().map((c) => ({ ...c, lead: getLeadById(c.leadId) }))
-    setClients(all)
-    const cfs = getClientCustomFields()
-    setColumns((prev) => {
-      const existing = new Set(prev.map((c) => c.key))
-      const newCols = cfs
-        .filter((cf) => !existing.has(`custom_${cf.id}`))
-        .map((cf) => ({ key: `custom_${cf.id}`, label: cf.name, visible: true, locked: false }))
-      return [...prev, ...newCols].filter(
-        (c) => !c.key.startsWith('custom_') || cfs.some((cf: CustomFieldDefinition) => `custom_${cf.id}` === c.key)
-      )
-    })
-  }, [])
+  function getLeadForClient(leadId: string) {
+    return leads.find((l) => l.id === leadId)
+  }
 
-  useEffect(() => { load() }, [load])
+  const clientsWithLeads: ClientWithLead[] = clients.map((c) => ({
+    ...c, lead: getLeadForClient(c.leadId),
+  }))
 
-  const filtered = clients.filter((c) => {
+  const filtered = clientsWithLeads.filter((c) => {
     const lead = c.lead
     const q = search.toLowerCase()
     const matchesSearch =
@@ -100,17 +108,9 @@ export function ClientsTable() {
 
   function toggleSelectAll() {
     if (allSelected) {
-      setSelected((prev) => {
-        const next = new Set(prev)
-        filtered.forEach((c) => next.delete(c.id))
-        return next
-      })
+      setSelected((prev) => { const next = new Set(prev); filtered.forEach((c) => next.delete(c.id)); return next })
     } else {
-      setSelected((prev) => {
-        const next = new Set(prev)
-        filtered.forEach((c) => next.add(c.id))
-        return next
-      })
+      setSelected((prev) => { const next = new Set(prev); filtered.forEach((c) => next.add(c.id)); return next })
     }
   }
 
@@ -120,34 +120,59 @@ export function ClientsTable() {
     setColumns((prev) => prev.map((c) => c.key === key && !c.locked ? { ...c, visible: !c.visible } : c))
   }
 
-  function handleDeleteConfirm() {
+  async function handleDeleteConfirm() {
     if (!deleteTarget) return
-    deleteClient(deleteTarget.id)
+    const { leadId } = await deleteClientAction(deleteTarget.id)
+    setClients((prev) => prev.filter((c) => c.id !== deleteTarget.id))
+    setLeads((prev) => prev.map((l) => l.id === leadId ? { ...l, isClient: false } : l))
     setDeleteTarget(null)
-    load()
   }
 
-  function handleBulkDelete() {
-    selected.forEach((id) => deleteClient(id))
+  async function handleBulkDelete() {
+    const ids = [...selected]
+    const results = await Promise.all(ids.map((id) => deleteClientAction(id)))
+    const deletedLeadIds = new Set(results.map((r) => r.leadId))
+    setClients((prev) => prev.filter((c) => !ids.includes(c.id)))
+    setLeads((prev) => prev.map((l) => deletedLeadIds.has(l.id) ? { ...l, isClient: false } : l))
     clearSelection()
     setBulkDeleteOpen(false)
-    load()
   }
 
-  function handleBulkStatusChange() {
+  async function handleBulkStatusChange() {
     if (!bulkStatus) return
-    selected.forEach((id) => updateClient(id, { status: bulkStatus as ClientStatus }))
+    const ids = [...selected]
+    const updated = await Promise.all(ids.map((id) => updateClientAction(id, { status: bulkStatus as ClientStatus })))
+    setClients((prev) => prev.map((c) => {
+      const u = updated.find((u) => u.id === c.id)
+      return u ?? c
+    }))
     clearSelection()
     setBulkStatusOpen(false)
     setBulkStatus('')
-    load()
   }
 
-  function handleOpenTimeline(c: ClientWithLead) {
+  async function handleOpenTimeline(c: ClientWithLead) {
+    const entries = await getActivityEntriesAction(c.leadId)
+    setTimelineEntries(entries)
     setTimelineClient(c)
-    setTimelineEntries(getActivityEntries(c.leadId))
   }
 
+  function handleClientSaved(client: Client) {
+    setClients((prev) => prev.map((c) => c.id === client.id ? client : c))
+    setEditingClient(null)
+  }
+
+  function handleClientAdded(client: Client) {
+    setClients((prev) => [client, ...prev])
+    setLeads((prev) => prev.map((l) => l.id === client.leadId ? { ...l, isClient: true } : l))
+  }
+
+  function handleCustomFieldsChanged(fields: CustomFieldDefinition[]) {
+    setCustomFields(fields)
+    setColumns(buildColumns(fields))
+  }
+
+  const availableLeads = leads.filter((l) => !l.isClient)
   const hasSelection = selected.size > 0
 
   return (
@@ -180,15 +205,10 @@ export function ClientsTable() {
       {hasSelection ? (
         <div className="flex items-center gap-3 px-8 py-3 border-b border-gray-100 bg-gray-50">
           <span className="text-sm font-medium text-gray-700">{selected.size} selected</span>
-          <button onClick={clearSelection} className="text-sm text-gray-400 hover:text-gray-600 transition-colors">
-            Clear
-          </button>
+          <button onClick={clearSelection} className="text-sm text-gray-400 hover:text-gray-600 transition-colors">Clear</button>
           <div className="ml-auto flex items-center gap-2">
-            {/* Change status */}
             <div className="relative">
-              <Button variant="secondary" size="sm" onClick={() => setBulkStatusOpen((v) => !v)}>
-                Change status
-              </Button>
+              <Button variant="secondary" size="sm" onClick={() => setBulkStatusOpen((v) => !v)}>Change status</Button>
               {bulkStatusOpen && (
                 <>
                   <div className="fixed inset-0 z-10" onClick={() => setBulkStatusOpen(false)} />
@@ -213,19 +233,13 @@ export function ClientsTable() {
                     </div>
                     <div className="flex gap-2 pt-1">
                       <Button variant="secondary" size="sm" onClick={() => setBulkStatusOpen(false)}>Cancel</Button>
-                      <Button size="sm" onClick={handleBulkStatusChange} disabled={!bulkStatus}>
-                        Apply
-                      </Button>
+                      <Button size="sm" onClick={handleBulkStatusChange} disabled={!bulkStatus}>Apply</Button>
                     </div>
                   </div>
                 </>
               )}
             </div>
-            {/* Bulk delete */}
-            <button
-              onClick={() => setBulkDeleteOpen(true)}
-              className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-sm font-medium text-red-600 hover:bg-red-50 transition-colors"
-            >
+            <button onClick={() => setBulkDeleteOpen(true)} className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-sm font-medium text-red-600 hover:bg-red-50 transition-colors">
               Delete
             </button>
           </div>
@@ -262,10 +276,7 @@ export function ClientsTable() {
           </div>
 
           {(search || filterStatus) && (
-            <button
-              onClick={() => { setSearch(''); setFilterStatus(''); clearSelection() }}
-              className="text-sm text-gray-400 hover:text-gray-700 transition-colors"
-            >
+            <button onClick={() => { setSearch(''); setFilterStatus(''); clearSelection() }} className="text-sm text-gray-400 hover:text-gray-700 transition-colors">
               Clear
             </button>
           )}
@@ -427,21 +438,26 @@ export function ClientsTable() {
 
       <AddClientModal
         open={addOpen}
+        allLeads={availableLeads}
+        customFields={customFields}
         onClose={() => setAddOpen(false)}
-        onAdded={load}
+        onAdded={handleClientAdded}
       />
 
       <ClientsConfigModal
         open={configOpen}
+        initialCustomFields={customFields}
         onClose={() => setConfigOpen(false)}
-        onChanged={load}
+        onChanged={handleCustomFieldsChanged}
       />
 
       <ClientSlideOver
         open={!!editingClient}
         client={editingClient}
+        lead={editingClient ? getLeadForClient(editingClient.leadId) ?? null : null}
+        customFields={customFields}
         onClose={() => setEditingClient(null)}
-        onSaved={load}
+        onSaved={handleClientSaved}
       />
 
       <DeleteConfirmDialog
@@ -464,9 +480,7 @@ export function ClientsTable() {
         open={bulkDeleteOpen}
         title={`Remove ${selected.size} client${selected.size !== 1 ? 's' : ''}`}
         description={
-          <span>
-            Remove <strong>{selected.size} client{selected.size !== 1 ? 's' : ''}</strong>? Their lead records will remain in the Leads section.
-          </span>
+          <span>Remove <strong>{selected.size} client{selected.size !== 1 ? 's' : ''}</strong>? Their lead records will remain in the Leads section.</span>
         }
         onConfirm={handleBulkDelete}
         onCancel={() => setBulkDeleteOpen(false)}
@@ -476,11 +490,8 @@ export function ClientsTable() {
         open={!!timelineClient}
         leadId={timelineClient?.leadId ?? ''}
         leadName={timelineClient?.lead ? `${timelineClient.lead.firstName} ${timelineClient.lead.lastName}` : ''}
-        entries={timelineEntries}
+        initialEntries={timelineEntries}
         onClose={() => setTimelineClient(null)}
-        onEntriesChange={() => {
-          if (timelineClient) setTimelineEntries(getActivityEntries(timelineClient.leadId))
-        }}
       />
     </div>
   )

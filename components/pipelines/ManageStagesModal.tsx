@@ -20,7 +20,7 @@ import { Modal } from '@/components/ui/Modal'
 import { Button } from '@/components/ui/Button'
 import { DeleteConfirmDialog } from '@/components/leads/DeleteConfirmDialog'
 import type { PipelineStage, PipelineEntry } from '@/types'
-import { createStage, updateStage, deleteStage, reorderStages } from '@/lib/pipelines'
+import { createStageAction, updateStageAction, deleteStageAction, reorderStagesAction } from '@/app/actions/pipelines'
 import { STAGE_COLORS, COLOR_KEYS, type StageColorKey } from './stageColors'
 
 interface ManageStagesModalProps {
@@ -30,7 +30,7 @@ interface ManageStagesModalProps {
   stages: PipelineStage[]
   entries: PipelineEntry[]
   onClose: () => void
-  onChanged: () => void
+  onChanged: (stages: PipelineStage[]) => void
 }
 
 interface PendingDelete {
@@ -208,36 +208,39 @@ export function ManageStagesModal({
 
   const sensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 5 } }))
 
-  function handleDragEnd({ active, over }: DragEndEvent) {
+  async function handleDragEnd({ active, over }: DragEndEvent) {
     if (!over || active.id === over.id) return
     const oldIndex = stages.findIndex((s) => s.id === active.id)
     const newIndex = stages.findIndex((s) => s.id === over.id)
     const reordered = arrayMove(stages, oldIndex, newIndex).map((s, i) => ({ ...s, order: i }))
     setStages(reordered)
-    reorderStages(reordered)
-    onChanged()
+    await reorderStagesAction(reordered)
+    onChanged(reordered)
   }
 
-  function handleAddStage() {
+  async function handleAddStage() {
     const name = newName.trim()
     if (!name) return
-    const stage = createStage(pipelineId, name, stages.length, newColor)
-    setStages((prev) => [...prev, stage])
+    const stage = await createStageAction({ pipelineId, name, order: stages.length, color: newColor })
+    const updated = [...stages, stage]
+    setStages(updated)
     setNewName('')
     setNewColor('blue')
-    onChanged()
+    onChanged(updated)
   }
 
-  function handleRename(id: string, name: string) {
-    updateStage(id, { name })
-    setStages((prev) => prev.map((s) => (s.id === id ? { ...s, name } : s)))
-    onChanged()
+  async function handleRename(id: string, name: string) {
+    await updateStageAction(id, { name })
+    const updated = stages.map((s) => (s.id === id ? { ...s, name } : s))
+    setStages(updated)
+    onChanged(updated)
   }
 
-  function handleColorChange(id: string, color: StageColorKey) {
-    updateStage(id, { color })
-    setStages((prev) => prev.map((s) => (s.id === id ? { ...s, color } : s)))
-    onChanged()
+  async function handleColorChange(id: string, color: StageColorKey) {
+    await updateStageAction(id, { color })
+    const updated = stages.map((s) => (s.id === id ? { ...s, color } : s))
+    setStages(updated)
+    onChanged(updated)
   }
 
   function handleDeleteRequest(stageId: string) {
@@ -247,12 +250,13 @@ export function ManageStagesModal({
     setPendingDelete({ stageId, stageName: stage.name, entryCount })
   }
 
-  function handleDeleteConfirm() {
+  async function handleDeleteConfirm() {
     if (!pendingDelete) return
-    deleteStage(pendingDelete.stageId)
-    setStages((prev) => prev.filter((s) => s.id !== pendingDelete.stageId))
+    await deleteStageAction(pendingDelete.stageId)
+    const updated = stages.filter((s) => s.id !== pendingDelete.stageId)
+    setStages(updated)
     setPendingDelete(null)
-    onChanged()
+    onChanged(updated)
   }
 
   return (

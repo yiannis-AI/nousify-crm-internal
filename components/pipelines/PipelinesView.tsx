@@ -1,15 +1,7 @@
 'use client'
 
-import { useState, useEffect, useCallback } from 'react'
-import type { Pipeline, PipelineStage, PipelineEntry, Lead } from '@/types'
-import {
-  getPipelines,
-  getStages,
-  getEntries,
-  addLeadToPipeline,
-  removeEntry,
-} from '@/lib/pipelines'
-import { getLeads } from '@/lib/leads'
+import { useState, useEffect } from 'react'
+import type { Pipeline, PipelineStage, PipelineEntry, Lead, ActivityEntry, CustomFieldDefinition } from '@/types'
 import { Button } from '@/components/ui/Button'
 import { PipelineBoard } from './PipelineBoard'
 import { CreatePipelineModal } from './CreatePipelineModal'
@@ -19,15 +11,30 @@ import { AddLeadModal } from './AddLeadModal'
 import { PostMoveNoteModal } from './PostMoveNoteModal'
 import { TimelineSlideOver } from '@/components/leads/TimelineSlideOver'
 import { LeadSlideOver } from '@/components/leads/LeadSlideOver'
-import { createStageChangeEntry, getActivityEntries } from '@/lib/activities'
-import type { ActivityEntry } from '@/types'
+import { addLeadToPipelineAction, removeLeadFromPipelineAction } from '@/app/actions/pipelines'
+import { createStageChangeEntryAction, getActivityEntriesAction } from '@/app/actions/activities'
+import { leadToPipelineEntry } from '@/lib/db-mappers'
 
-export function PipelinesView() {
-  const [pipelines, setPipelines] = useState<Pipeline[]>([])
-  const [activePipelineId, setActivePipelineId] = useState<string | null>(null)
-  const [stages, setStages] = useState<PipelineStage[]>([])
+interface PipelinesViewProps {
+  initialPipelines: Pipeline[]
+  initialStages: PipelineStage[]
+  initialLeads: Lead[]
+  initialCustomFields: CustomFieldDefinition[]
+}
+
+export function PipelinesView({
+  initialPipelines,
+  initialStages,
+  initialLeads,
+  initialCustomFields,
+}: PipelinesViewProps) {
+  const [pipelines, setPipelines] = useState<Pipeline[]>(initialPipelines)
+  const [allStages, setAllStages] = useState<PipelineStage[]>(initialStages)
+  const [leads, setLeads] = useState<Lead[]>(initialLeads)
+  const [activePipelineId, setActivePipelineId] = useState<string | null>(
+    initialPipelines.length > 0 ? initialPipelines[0].id : null
+  )
   const [entries, setEntries] = useState<PipelineEntry[]>([])
-  const [leads, setLeads] = useState<Lead[]>([])
 
   const [tasksLeadId, setTasksLeadId] = useState<string | null>(null)
   const [tasksEntries, setTasksEntries] = useState<ActivityEntry[]>([])
@@ -39,38 +46,19 @@ export function PipelinesView() {
   const [addLeadStageId, setAddLeadStageId] = useState<string | null>(null)
   const [postMoveData, setPostMoveData] = useState<{ leadId: string; stageName: string } | null>(null)
 
-  const loadAll = useCallback(() => {
-    const allPipelines = getPipelines()
-    setPipelines(allPipelines)
-    setLeads(getLeads())
-    if (activePipelineId) {
-      setStages(getStages(activePipelineId))
-      setEntries(getEntries(activePipelineId))
-    }
-  }, [activePipelineId])
-
-  useEffect(() => {
-    const allPipelines = getPipelines()
-    setPipelines(allPipelines)
-    setLeads(getLeads())
-    if (allPipelines.length > 0 && !activePipelineId) {
-      setActivePipelineId(allPipelines[0].id)
-    }
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [])
-
+  // Compute entries for active pipeline from leads state
   useEffect(() => {
     if (activePipelineId) {
-      setStages(getStages(activePipelineId))
-      setEntries(getEntries(activePipelineId))
+      const pipelineLeads = leads.filter((l) => l.pipelineId === activePipelineId)
+      setEntries(pipelineLeads.map(leadToPipelineEntry))
     } else {
-      setStages([])
       setEntries([])
     }
-  }, [activePipelineId])
+  }, [activePipelineId, leads])
 
   const activePipeline = pipelines.find((p) => p.id === activePipelineId) ?? null
-  const addLeadStage = stages.find((s) => s.id === addLeadStageId) ?? null
+  const activeStages = activePipelineId ? allStages.filter((s) => s.pipelineId === activePipelineId) : []
+  const addLeadStage = activeStages.find((s) => s.id === addLeadStageId) ?? null
 
   function handlePipelineCreated(pipeline: Pipeline) {
     setPipelines((prev) => [...prev, pipeline])
@@ -88,34 +76,45 @@ export function PipelinesView() {
     const remaining = pipelines.filter((p) => p.id !== id)
     setPipelines(remaining)
     setEditingPipeline(null)
+    // Clear pipeline assignment from affected leads in state
+    setLeads((prev) => prev.map((l) => l.pipelineId === id ? { ...l, pipelineId: '', stageId: '' } : l))
+    // Remove stages for deleted pipeline
+    setAllStages((prev) => prev.filter((s) => s.pipelineId !== id))
     if (activePipelineId === id) {
       setActivePipelineId(remaining.length > 0 ? remaining[0].id : null)
     }
+  }
+
+  function handleStagesChanged(updatedStages: PipelineStage[]) {
+    // Replace stages for this pipeline in allStages
+    setAllStages((prev) => {
+      const otherPipelinesStages = prev.filter((s) => s.pipelineId !== activePipelineId)
+      return [...otherPipelinesStages, ...updatedStages]
+    })
   }
 
   function handleEditLead(lead: Lead) {
     setEditingLead(lead)
   }
 
-  function handleViewTasks(leadId: string) {
+  async function handleViewTasks(leadId: string) {
+    const entries = await getActivityEntriesAction(leadId)
+    setTasksEntries(entries)
     setTasksLeadId(leadId)
-    setTasksEntries(getActivityEntries(leadId))
   }
 
   function handleStageMoved({ leadId, stageName }: { leadId: string; stageName: string }) {
     setPostMoveData({ leadId, stageName })
   }
 
-function handleAddLead(leadId: string) {
+  async function handleAddLead(leadId: string) {
     if (!activePipelineId || !addLeadStageId) return
-    const stageEntries = entries.filter((e) => e.stageId === addLeadStageId)
-    const entry = addLeadToPipeline(activePipelineId, addLeadStageId, leadId, stageEntries.length)
-    setEntries((prev) => [...prev, entry])
-    // Auto-log stage assignment as a stage_change entry
+    await addLeadToPipelineAction(leadId, activePipelineId, addLeadStageId)
+    // Log stage assignment
     const pipeline = pipelines.find((p) => p.id === activePipelineId)
-    const stage = stages.find((s) => s.id === addLeadStageId)
+    const stage = activeStages.find((s) => s.id === addLeadStageId)
     if (pipeline && stage) {
-      createStageChangeEntry({
+      await createStageChangeEntryAction({
         leadId,
         pipelineId: activePipelineId,
         pipelineName: pipeline.name,
@@ -123,12 +122,32 @@ function handleAddLead(leadId: string) {
         newStageId: addLeadStageId,
       })
     }
+    // Update lead in state
+    setLeads((prev) => prev.map((l) =>
+      l.id === leadId ? { ...l, pipelineId: activePipelineId!, stageId: addLeadStageId! } : l
+    ))
   }
 
-  function handleRemoveEntry(entryId: string) {
-    removeEntry(entryId)
-    setEntries((prev) => prev.filter((e) => e.id !== entryId))
+  async function handleRemoveEntry(entryId: string) {
+    // entryId === leadId for synthesized entries
+    await removeLeadFromPipelineAction(entryId)
+    setLeads((prev) => prev.map((l) =>
+      l.id === entryId ? { ...l, pipelineId: '', stageId: '' } : l
+    ))
   }
+
+  function handleLeadMoved(leadId: string, newStageId: string) {
+    setLeads((prev) => prev.map((l) =>
+      l.id === leadId ? { ...l, stageId: newStageId } : l
+    ))
+  }
+
+  function handleLeadSaved(lead: Lead) {
+    setLeads((prev) => prev.map((l) => l.id === lead.id ? lead : l))
+    setEditingLead(null)
+  }
+
+  const tasksLead = leads.find((l) => l.id === tasksLeadId)
 
   return (
     <div className="flex flex-col h-full">
@@ -202,7 +221,7 @@ function handleAddLead(leadId: string) {
           </div>
 
           {/* Pipeline summary */}
-          {stages.length > 0 && (() => {
+          {activeStages.length > 0 && (() => {
             const totalValue = entries.reduce((sum, entry) => {
               const lead = leads.find((l) => l.id === entry.leadId)
               return sum + (lead ? parseFloat(lead.estimatedValue) || 0 : 0)
@@ -228,20 +247,21 @@ function handleAddLead(leadId: string) {
 
           {/* Board area */}
           <div className="flex-1 overflow-hidden px-8 py-6">
-            {stages.length === 0 ? (
+            {activeStages.length === 0 ? (
               <div className="flex flex-col items-center justify-center h-full text-center">
                 <p className="text-sm font-medium text-gray-700">No stages yet</p>
                 <p className="text-sm text-gray-400 mt-1">Click &quot;Configure&quot; to add stages and start placing leads on the board.</p>
               </div>
             ) : (
               <PipelineBoard
-                stages={stages}
+                stages={activeStages}
                 entries={entries}
                 leads={leads}
                 pipelineId={activePipelineId!}
                 pipelineName={activePipeline!.name}
                 onAddLead={(stageId) => setAddLeadStageId(stageId)}
                 onRemoveEntry={handleRemoveEntry}
+                onLeadMoved={handleLeadMoved}
                 onEntriesChange={setEntries}
                 onStageMoved={handleStageMoved}
                 onViewTasks={handleViewTasks}
@@ -274,10 +294,10 @@ function handleAddLead(leadId: string) {
           open={showManageStages}
           pipelineId={activePipeline.id}
           pipelineName={activePipeline.name}
-          stages={stages}
+          stages={activeStages}
           entries={entries}
           onClose={() => setShowManageStages(false)}
-          onChanged={loadAll}
+          onChanged={handleStagesChanged}
         />
       )}
 
@@ -306,19 +326,20 @@ function handleAddLead(leadId: string) {
       <LeadSlideOver
         open={!!editingLead}
         lead={editingLead}
+        pipelines={pipelines}
+        allStages={allStages}
+        customFields={initialCustomFields}
+        allLeads={leads}
         onClose={() => setEditingLead(null)}
-        onSaved={loadAll}
+        onSaved={handleLeadSaved}
       />
 
       <TimelineSlideOver
         open={!!tasksLeadId}
         leadId={tasksLeadId ?? ''}
-        leadName={leads.find((l) => l.id === tasksLeadId) ? `${leads.find((l) => l.id === tasksLeadId)!.firstName} ${leads.find((l) => l.id === tasksLeadId)!.lastName}` : ''}
-        entries={tasksEntries}
+        leadName={tasksLead ? `${tasksLead.firstName} ${tasksLead.lastName}` : ''}
+        initialEntries={tasksEntries}
         onClose={() => setTasksLeadId(null)}
-        onEntriesChange={() => {
-          if (tasksLeadId) setTasksEntries(getActivityEntries(tasksLeadId))
-        }}
       />
     </div>
   )

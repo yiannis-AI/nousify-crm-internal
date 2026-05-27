@@ -1,17 +1,17 @@
 'use client'
 
 import { useState, useEffect } from 'react'
-import { v4 as uuidv4 } from 'uuid'
 import { Modal } from '@/components/ui/Modal'
 import { Button } from '@/components/ui/Button'
 import { DeleteConfirmDialog } from './DeleteConfirmDialog'
-import { db } from '@/lib/storage'
+import { saveLeadCustomFieldsAction } from '@/app/actions/custom-fields'
 import type { CustomFieldDefinition, CustomFieldType } from '@/types'
 
 interface LeadsConfigModalProps {
   open: boolean
+  initialCustomFields: CustomFieldDefinition[]
   onClose: () => void
-  onChanged: () => void
+  onChanged: (fields: CustomFieldDefinition[]) => void
 }
 
 interface PendingDelete {
@@ -27,9 +27,9 @@ const FIELD_TYPES: { value: CustomFieldType; label: string }[] = [
   { value: 'select', label: 'Select' },
 ]
 
-export function LeadsConfigModal({ open, onClose, onChanged }: LeadsConfigModalProps) {
+export function LeadsConfigModal({ open, initialCustomFields, onClose, onChanged }: LeadsConfigModalProps) {
   const [pendingDelete, setPendingDelete] = useState<PendingDelete | null>(null)
-  const [fields, setFields]         = useState<CustomFieldDefinition[]>([])
+  const [fields, setFields]         = useState<CustomFieldDefinition[]>(initialCustomFields)
   const [newName, setNewName]       = useState('')
   const [newType, setNewType]       = useState<CustomFieldType>('text')
   const [newOptions, setNewOptions] = useState('')
@@ -37,33 +37,40 @@ export function LeadsConfigModal({ open, onClose, onChanged }: LeadsConfigModalP
   const [editingId, setEditingId]   = useState<string | null>(null)
   const [editLabel, setEditLabel]   = useState('')
   const [editError, setEditError]   = useState('')
+  const [saving, setSaving]         = useState(false)
 
   useEffect(() => {
     if (open) {
-      setFields(db.getCustomFields())
+      setFields(initialCustomFields)
       setNewName(''); setNewOptions(''); setAddError('')
       setEditingId(null); setEditError('')
     }
-  }, [open])
+  }, [open, initialCustomFields])
 
-  function handleAdd() {
+  async function handleAdd() {
     const name = newName.trim()
     if (!name) { setAddError('Field name is required.'); return }
     if (fields.some((f) => f.name.toLowerCase() === name.toLowerCase())) {
       setAddError('A field with this name already exists.')
       return
     }
-    const def: CustomFieldDefinition = {
-      id: uuidv4(), name, type: newType,
+    const newField: CustomFieldDefinition = {
+      id: '',  // server will assign
+      name,
+      type: newType,
       options: newType === 'select'
         ? newOptions.split(',').map((o) => o.trim()).filter(Boolean)
         : undefined,
     }
-    const updated = [...fields, def]
-    db.saveCustomFields(updated)
-    setFields(updated)
-    setNewName(''); setNewOptions(''); setAddError('')
-    onChanged()
+    setSaving(true)
+    try {
+      const updated = await saveLeadCustomFieldsAction([...fields, newField])
+      setFields(updated)
+      setNewName(''); setNewOptions(''); setAddError('')
+      onChanged(updated)
+    } finally {
+      setSaving(false)
+    }
   }
 
   function confirmDelete(f: CustomFieldDefinition) {
@@ -76,18 +83,16 @@ export function LeadsConfigModal({ open, onClose, onChanged }: LeadsConfigModalP
           All data stored in this field across your leads will be permanently lost.
         </>
       ),
-      onConfirm: () => {
+      onConfirm: async () => {
         const updated = fields.filter((x) => x.id !== f.id)
-        db.saveCustomFields(updated)
-        db.getLeads().forEach((l) => {
-          if (f.id in (l.customFields ?? {})) {
-            const cf = { ...l.customFields }
-            delete cf[f.id]
-            db.updateLead(l.id, { customFields: cf })
-          }
-        })
-        setFields(updated)
-        onChanged()
+        setSaving(true)
+        try {
+          const saved = await saveLeadCustomFieldsAction(updated)
+          setFields(saved)
+          onChanged(saved)
+        } finally {
+          setSaving(false)
+        }
       },
     })
   }
@@ -98,7 +103,7 @@ export function LeadsConfigModal({ open, onClose, onChanged }: LeadsConfigModalP
     setEditError('')
   }
 
-  function saveEdit(id: string) {
+  async function saveEdit(id: string) {
     const name = editLabel.trim()
     if (!name) { setEditError('Name cannot be empty.'); return }
     if (fields.some((f) => f.id !== id && f.name.toLowerCase() === name.toLowerCase())) {
@@ -106,10 +111,15 @@ export function LeadsConfigModal({ open, onClose, onChanged }: LeadsConfigModalP
       return
     }
     const updated = fields.map((f) => f.id === id ? { ...f, name } : f)
-    db.saveCustomFields(updated)
-    setFields(updated)
-    setEditingId(null)
-    onChanged()
+    setSaving(true)
+    try {
+      const saved = await saveLeadCustomFieldsAction(updated)
+      setFields(saved)
+      setEditingId(null)
+      onChanged(saved)
+    } finally {
+      setSaving(false)
+    }
   }
 
   return (
@@ -133,7 +143,7 @@ export function LeadsConfigModal({ open, onClose, onChanged }: LeadsConfigModalP
                           autoFocus
                           className="flex-1 border border-gray-200 rounded-md px-2 py-1 text-sm focus:outline-none focus:ring-2 focus:ring-gray-900"
                         />
-                        <button onClick={() => saveEdit(f.id)} className="text-xs font-medium text-gray-700 hover:text-gray-900 px-2 py-1 rounded hover:bg-gray-200 transition-colors">Save</button>
+                        <button onClick={() => saveEdit(f.id)} disabled={saving} className="text-xs font-medium text-gray-700 hover:text-gray-900 px-2 py-1 rounded hover:bg-gray-200 transition-colors disabled:opacity-50">Save</button>
                         <button onClick={() => setEditingId(null)} className="text-xs text-gray-400 hover:text-gray-600 px-2 py-1 rounded hover:bg-gray-200 transition-colors">Cancel</button>
                       </div>
                       {editError && <p className="text-xs text-red-500 pl-1">{editError}</p>}
@@ -197,7 +207,9 @@ export function LeadsConfigModal({ open, onClose, onChanged }: LeadsConfigModalP
               />
             )}
             {addError && <p className="text-xs text-red-500">{addError}</p>}
-            <Button onClick={handleAdd} className="w-full">Add field</Button>
+            <Button onClick={handleAdd} disabled={saving} className="w-full">
+              {saving ? 'Saving…' : 'Add field'}
+            </Button>
           </div>
         </div>
       </Modal>

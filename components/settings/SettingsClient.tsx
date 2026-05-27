@@ -1,20 +1,31 @@
 'use client'
 
-import { useState, useEffect } from 'react'
-import { getSettings, saveSettings, CURRENCIES } from '@/lib/settings'
+import { useState } from 'react'
+import { useRouter } from 'next/navigation'
+import { createClient } from '@/lib/supabase'
+import { saveSettingsAction } from '@/app/actions/settings'
+import { CURRENCIES } from '@/lib/currencies'
+import type { AppSettings } from '@/types'
 
 const inputClass = 'w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-gray-900 focus:border-transparent'
 
-export default function SettingsPage() {
-  const [currencyCode, setCurrencyCode] = useState('USD')
+interface SettingsClientProps {
+  initialSettings: AppSettings
+}
 
-  useEffect(() => {
-    setCurrencyCode(getSettings().currencyCode)
-  }, [])
+export function SettingsClient({ initialSettings }: SettingsClientProps) {
+  const router = useRouter()
+  const [currencyCode, setCurrencyCode] = useState(initialSettings.currencyCode)
 
-  function handleCurrencyChange(code: string) {
+  async function handleCurrencyChange(code: string) {
     setCurrencyCode(code)
-    saveSettings({ currencyCode: code })
+    await saveSettingsAction({ currencyCode: code })
+  }
+
+  async function handleSignOut() {
+    const supabase = createClient()
+    await supabase.auth.signOut()
+    router.push('/login')
   }
 
   return (
@@ -73,6 +84,24 @@ export default function SettingsPage() {
           </div>
         </div>
 
+        {/* Account section */}
+        <div>
+          <p className="text-xs font-medium text-gray-400 uppercase tracking-wide mb-4">Account</p>
+          <div className="bg-white border border-gray-200 rounded-xl divide-y divide-gray-100">
+            <div className="px-5 py-4 flex items-center justify-between gap-8">
+              <div>
+                <p className="text-sm font-medium text-gray-900">Sign out</p>
+                <p className="text-xs text-gray-500 mt-0.5">Sign out of your Instaworm account.</p>
+              </div>
+              <button
+                onClick={handleSignOut}
+                className="flex-shrink-0 text-sm font-medium text-red-600 hover:text-red-700 border border-red-200 hover:border-red-300 px-4 py-2 rounded-lg transition-colors"
+              >
+                Sign out
+              </button>
+            </div>
+          </div>
+        </div>
       </div>
     </div>
   )

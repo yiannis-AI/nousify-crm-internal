@@ -12,8 +12,8 @@ import {
 } from '@dnd-kit/core'
 import { arrayMove } from '@dnd-kit/sortable'
 import type { Lead, PipelineEntry, PipelineStage } from '@/types'
-import { moveEntry } from '@/lib/pipelines'
-import { createStageChangeEntry } from '@/lib/activities'
+import { moveLeadToStageAction } from '@/app/actions/pipelines'
+import { createStageChangeEntryAction } from '@/app/actions/activities'
 import { StageColumn } from './StageColumn'
 import { LeadCard } from './LeadCard'
 
@@ -25,6 +25,7 @@ interface PipelineBoardProps {
   pipelineName: string
   onAddLead: (stageId: string) => void
   onRemoveEntry: (entryId: string) => void
+  onLeadMoved: (leadId: string, newStageId: string) => void
   onEntriesChange: (entries: PipelineEntry[]) => void
   onStageMoved: (params: { leadId: string; stageName: string }) => void
   onViewTasks: (leadId: string) => void
@@ -39,6 +40,7 @@ export function PipelineBoard({
   pipelineName,
   onAddLead,
   onRemoveEntry,
+  onLeadMoved,
   onEntriesChange,
   onStageMoved,
   onViewTasks,
@@ -55,7 +57,7 @@ export function PipelineBoard({
     setActiveEntry(entry ?? null)
   }
 
-  function handleDragEnd({ active, over }: DragEndEvent) {
+  async function handleDragEnd({ active, over }: DragEndEvent) {
     setActiveEntry(null)
     if (!over || active.id === over.id) return
 
@@ -69,32 +71,33 @@ export function PipelineBoard({
 
     const sameStage = draggedEntry.stageId === targetStageId
 
-    let updatedEntries: PipelineEntry[]
-
     if (sameStage) {
+      // Reorder within same stage — local state only, no server persistence
       const stageEntries = entries
         .filter((e) => e.stageId === targetStageId)
         .sort((a, b) => a.order - b.order)
       const oldIndex = stageEntries.findIndex((e) => e.id === active.id)
       const newIndex = stageEntries.findIndex((e) => e.id === over.id)
       if (oldIndex === -1 || newIndex === -1) return
-      const reordered = arrayMove(stageEntries, oldIndex, newIndex).map((e, i) => ({
-        ...e,
-        order: i,
-      }))
-      reordered.forEach((e) => moveEntry(e.id, e.stageId, e.order))
-      updatedEntries = entries.map((e) => reordered.find((r) => r.id === e.id) ?? e)
+      const reordered = arrayMove(stageEntries, oldIndex, newIndex).map((e, i) => ({ ...e, order: i }))
+      const updatedEntries = entries.map((e) => reordered.find((r) => r.id === e.id) ?? e)
+      onEntriesChange(updatedEntries)
     } else {
+      // Move to different stage — persist to server
       const previousStageId = draggedEntry.stageId
-      const targetEntries = entries.filter((e) => e.stageId === targetStageId)
-      const newOrder = targetEntries.length
-      moveEntry(draggedEntry.id, targetStageId, newOrder)
-
       const newStage = stages.find((s) => s.id === targetStageId)
       const newStageName = newStage?.name ?? ''
+      const newOrder = entries.filter((e) => e.stageId === targetStageId).length
 
-      // Auto-log stage change activity
-      createStageChangeEntry({
+      // Optimistic update
+      const updatedEntries = entries.map((e) =>
+        e.id === draggedEntry.id ? { ...e, stageId: targetStageId, order: newOrder } : e
+      )
+      onEntriesChange(updatedEntries)
+
+      // Persist
+      await moveLeadToStageAction(draggedEntry.leadId, targetStageId)
+      await createStageChangeEntryAction({
         leadId: draggedEntry.leadId,
         pipelineId,
         pipelineName,
@@ -103,16 +106,9 @@ export function PipelineBoard({
         newStageId: targetStageId,
       })
 
-      updatedEntries = entries.map((e) =>
-        e.id === draggedEntry.id ? { ...e, stageId: targetStageId, order: newOrder } : e
-      )
-
-      onEntriesChange(updatedEntries)
+      onLeadMoved(draggedEntry.leadId, targetStageId)
       onStageMoved({ leadId: draggedEntry.leadId, stageName: newStageName })
-      return
     }
-
-    onEntriesChange(updatedEntries)
   }
 
   const activeLead = activeEntry ? leads.find((l) => l.id === activeEntry.leadId) : null

@@ -1,14 +1,16 @@
-# Nousify CRM — Internal Tool
+# Instaworm CRM — Internal Tool
 
-An internal CRM for Nousify, initially focused on lead and pipeline management. Designed to grow into a full SaaS product.
+An internal CRM for Instaworm, focused on lead management, pipeline tracking, and client relationships. Designed to grow into a full outreach automation platform.
 
 ---
 
 ## Stack
 
-- **Next.js 16** (App Router, Turbopack) + **TypeScript** + **Tailwind CSS**
+- **Next.js 15** (App Router) + **TypeScript** + **Tailwind CSS**
+- **Database**: Supabase (Postgres) with Row Level Security
+- **Auth**: Supabase Auth
 - **Drag-and-drop**: `@dnd-kit/core` + `@dnd-kit/sortable`
-- **Storage**: `localStorage` via a swappable `StorageAdapter` interface — migrating to a database requires only a new adapter in `lib/storage.ts`
+- **Data access**: Server Components for reads, Server Actions for mutations
 
 ---
 
@@ -20,63 +22,88 @@ npm run dev
 # → http://localhost:3000
 ```
 
+Create a `.env.local` file with:
+
+```
+NEXT_PUBLIC_SUPABASE_URL=your_supabase_url
+NEXT_PUBLIC_SUPABASE_ANON_KEY=your_anon_key
+SUPABASE_SERVICE_ROLE_KEY=your_service_role_key
+```
+
+> `SUPABASE_SERVICE_ROLE_KEY` is server-side only — never prefix it with `NEXT_PUBLIC_`.
+
+---
+
+## Database Setup
+
+Run `supabase/schema.sql` in the Supabase SQL Editor to create all tables, RLS policies, and constraints.
+
 ---
 
 ## Project Structure
 
 ```
 app/
-  layout.tsx                Root layout (dark sidebar + main content area)
-  page.tsx                  Redirects to /leads
-  leads/
-    page.tsx                Leads list — table, search, filters, sort, pagination
-    [id]/page.tsx           Lead detail page (two-column: info + activity feed)
-  pipelines/page.tsx        Kanban pipeline board
-  opportunities/page.tsx    Placeholder
-  clients/page.tsx          Placeholder
-  content/page.tsx          Placeholder
-  ai-assistant/page.tsx     Placeholder
-  analytics/page.tsx        Placeholder
-  integrations/page.tsx     Placeholder
-  settings/page.tsx         Leads configuration (custom fields)
+  (app)/
+    layout.tsx                Root layout (dark sidebar + main content area)
+    leads/page.tsx            Leads list — table, search, filters, sort, pagination
+    pipelines/page.tsx        Kanban pipeline board
+    clients/page.tsx          Clients table with status tracking
+    settings/page.tsx         Currency and app configuration
+  actions/
+    leads.ts                  Lead CRUD server actions
+    clients.ts                Client CRUD server actions
+    pipelines.ts              Pipeline + stage server actions
+    activities.ts             Activity entry server actions
+    custom-fields.ts          Custom field definition server actions
+    settings.ts               Settings server actions
 
 components/
   layout/
-    Sidebar.tsx             Fixed dark sidebar navigation
+    Sidebar.tsx               Fixed dark sidebar navigation
   leads/
-    LeadsTable.tsx          Table with search, filters, sort, column toggle, pagination
-    LeadSlideOver.tsx       Right-drawer — create/edit a lead; wires activity logging
-    ActivityTimeline.tsx    Chronological activity feed (notes, docs, stage changes)
-    ActivityEntryForm.tsx   Modal form — add/edit notes and documents
-    TimelineSlideOver.tsx   Tasks drawer (used from pipeline board cards)
-    LeadsConfigModal.tsx    Custom field management
-    DeleteConfirmDialog.tsx Reusable delete confirmation dialog
+    LeadsTable.tsx            Table with search, filters, sort, column toggle, pagination, bulk actions
+    LeadSlideOver.tsx         Right-drawer — create/edit a lead
+    ActivityTimeline.tsx      Chronological activity feed
+    ActivityEntryForm.tsx     Modal — add/edit notes and documents
+    TimelineSlideOver.tsx     Timeline drawer (used from leads table and pipeline board)
+    LeadsConfigModal.tsx      Custom field management
+    ImportLeadsModal.tsx      CSV bulk import
+    DeleteConfirmDialog.tsx   Reusable delete confirmation
   pipelines/
-    PipelinesView.tsx       Pipeline tab bar, summary stats, modal orchestration
-    PipelineBoard.tsx       DnD context — handles drag-start, drag-end, stage moves
-    StageColumn.tsx         Individual Kanban column with droppable zone
-    LeadCard.tsx            Sortable card — name, quality badge, estimated value
+    PipelinesView.tsx         Pipeline tab bar, summary stats, modal orchestration
+    PipelineBoard.tsx         DnD context — drag-start, drag-end, stage moves
+    StageColumn.tsx           Individual Kanban column
+    LeadCard.tsx              Sortable card — name, quality badge, estimated value
     CreatePipelineModal.tsx
     EditPipelineModal.tsx
-    ManageStagesModal.tsx   Stage CRUD + colour picker
-    AddLeadModal.tsx        Add an existing lead to a stage
-    PostMoveNoteModal.tsx   Optional note prompt after a drag-move
-    stageColors.ts          Shared colour constants (10 palette keys)
+    ManageStagesModal.tsx     Stage CRUD + colour picker
+    AddLeadModal.tsx          Add an existing lead to a stage
+    PostMoveNoteModal.tsx     Optional note prompt after a drag-move
+    stageColors.ts            Shared colour constants
+  clients/
+    ClientsTable.tsx          Clients table with status filter and bulk actions
+    ClientSlideOver.tsx       Right-drawer — view/edit a client record
+    AddClientModal.tsx        Two-step modal — search leads → confirm client details
+    ClientsConfigModal.tsx    Client custom field management
   ui/
-    SlideOver.tsx           Right-drawer wrapper (md / lg sizes)
-    Modal.tsx               Centred modal wrapper
+    SlideOver.tsx             Right-drawer wrapper (md / lg sizes)
+    Modal.tsx                 Centred modal wrapper
     Button.tsx
-    Badge.tsx               LeadQualityBadge + generic Badge
+    Badge.tsx                 LeadQualityBadge + ClientStatusBadge + generic Badge
     Pagination.tsx
 
 lib/
-  storage.ts                StorageAdapter interface + localStorage implementation
-  leads.ts                  Lead CRUD helpers + filter/sort
-  pipelines.ts              Pipeline, stage, and entry CRUD helpers
-  activities.ts             Activity entry CRUD + convenience creators
+  supabase-server.ts          Async server Supabase client (Server Components + Actions)
+  supabase.ts                 Browser Supabase client
+  db-mappers.ts               Row ↔ TypeScript mappers for all tables
+  currencies.ts               Currency symbol lookup
 
 types/
-  index.ts                  All shared TypeScript types
+  index.ts                    All shared TypeScript types
+
+supabase/
+  schema.sql                  Complete database schema with RLS policies
 ```
 
 ---
@@ -85,14 +112,15 @@ types/
 
 ### Leads
 
-**Fields**: First Name, Last Name, Email, Phone, Website, Company, Job Title, Pipeline, Stage, Lead Quality, Estimated Value, plus any custom fields.
+**Fields**: First Name, Last Name, Email, Phone, Website, Company, Job Title, Pipeline, Stage, Lead Quality, Estimated Value, plus any user-defined custom fields.
 
 **Custom fields**: Add text / number / date / select fields from the Configure modal. They appear as table columns and in the create/edit form.
 
-**Interaction pattern**:
-- "New lead" or row "Edit" → `LeadSlideOver` drawer
-- Row "Tasks" → `/leads/[id]` full detail page
-- Creating a lead auto-logs a `lead_created` activity entry; optional initial note and document can also be captured at creation time
+**Locked columns**: Name and Email are always visible and cannot be hidden from the column picker.
+
+**Bulk actions**: Select multiple leads to delete or move to a pipeline stage in bulk.
+
+**CSV import**: Import leads from a spreadsheet. Duplicate emails are detected and skipped.
 
 ### Activity Timeline
 
@@ -102,74 +130,52 @@ Every lead has a chronological activity feed:
 |------|-------------|
 | `lead_created` | Auto-created when a lead is saved for the first time |
 | `stage_change` | Auto-created on every pipeline/stage assignment or move |
+| `client_converted` | Auto-created when a lead is converted to a client |
 | `note` | User-created free-text note |
 | `document` | User-created entry with a linked file/URL |
 
-System-generated entries (`lead_created`, `stage_change`) are read-only. User entries can be edited and deleted.
+System-generated entries are read-only. User entries can be edited and deleted.
 
 ### Pipelines
 
 - Create multiple named pipelines, each with ordered stages
-- Each stage has a configurable colour (set via the Configure modal)
-- Drag cards between stages or reorder within a stage — both trigger activity log entries
-- After a drag move, an optional `PostMoveNoteModal` lets the user attach context
+- Each stage has a configurable colour
+- Drag cards between stages — triggers automatic activity log entries
+- After a drag move, an optional note prompt lets the user attach context
+
+### Clients
+
+- Leads are converted to clients from the Clients module
+- Client records track: contract value, client since date, renewal date, status (Active / At Risk / Churned)
+- Converted leads show a purple "Client" badge in the Leads table
+- Full activity timeline shared between lead and client views
+- Bulk status updates and bulk delete supported
+
+### Settings
+
+- Currency selection (applied to estimated values and contract values across all modules)
 
 ---
 
-## Architecture Notes
+## Architecture
 
-### Swapping localStorage for a database
+### Data access pattern
 
-All data access goes through `StorageAdapter` in `lib/storage.ts`. To move to a real database:
+- **Server Components** fetch initial data and pass it as props
+- **Client Components** seed `useState` from those props and own interactive state
+- **Server Actions** handle all mutations — no API routes
 
-1. Implement a new adapter (e.g. `supabaseAdapter`) backed by Next.js API routes or Server Actions
-2. Export it from `lib/storage.ts` in place of `localStorageAdapter`
-3. Nothing else in the codebase changes
+### Security
 
-### Multi-tenancy (when this becomes a SaaS product)
-
-> **Every table must have an `organizationId` column from day one.**
-
-Add `organizationId` to all tables when defining the database schema. Retrofitting it onto a live product is the one decision that is genuinely painful to reverse. Everything else — auth, billing, roles, subdomain routing — is additive.
+- All tables have Row Level Security: `USING (user_id = auth.uid())`
+- `SUPABASE_SERVICE_ROLE_KEY` is server-side only — never exposed to the browser
 
 ---
 
 ## Versioning
 
-This project follows [Semantic Versioning](https://semver.org/):
-
-- **MAJOR** — breaking changes to data schema or module contracts
-- **MINOR** — new features (new modules, new fields, new UI flows)
-- **PATCH** — bug fixes and visual/UX polish
-
 | Version | Description |
 |---------|-------------|
-| v1.0.0  | Leads module (CRUD, custom fields, activity timeline) + Pipelines module (Kanban board, drag-and-drop, stage colours, post-move notes) |
-
----
-
-## Roadmap
-
-### Phase 1 — MVP ✅
-- [x] Leads module: table, CRUD, filters, sort, pagination, custom fields
-- [x] Activity timeline per lead (notes, documents, auto-logged stage changes)
-- [x] Pipelines module: multi-pipeline Kanban, drag-and-drop, stage colour configuration
-- [x] Lead detail page (two-column: info panel + activity feed)
-- [x] Dark sidebar navigation
-
-### Phase 2 — Database
-- [ ] Supabase (or similar) integration
-- [ ] Authentication (NextAuth or Clerk)
-- [ ] Replace localStorage adapter with DB adapter
-
-### Phase 3 — Additional Modules
-- [ ] Opportunities
-- [ ] Clients
-- [ ] Content
-- [ ] AI Assistant
-- [ ] Analytics
-
-### Phase 4 — SaaS
-- [ ] Multi-tenancy (`organizationId` everywhere)
-- [ ] Team collaboration and roles
-- [ ] Billing (Stripe)
+| v1.0.0 | Leads module + Pipelines module |
+| v1.0.1 | Clients module, CSV import, bulk actions, Settings |
+| v1.0.2 | Supabase migration — full Server Actions architecture, Supabase Postgres replacing localStorage |

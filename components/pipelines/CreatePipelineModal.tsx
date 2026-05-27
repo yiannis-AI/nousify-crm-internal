@@ -4,7 +4,7 @@ import { useState, useEffect } from 'react'
 import { Modal } from '@/components/ui/Modal'
 import { Button } from '@/components/ui/Button'
 import type { Pipeline } from '@/types'
-import { createPipeline } from '@/lib/pipelines'
+import { createPipelineAction } from '@/app/actions/pipelines'
 
 interface CreatePipelineModalProps {
   open: boolean
@@ -20,11 +20,11 @@ export function CreatePipelineModal({ open, onClose, onCreated }: CreatePipeline
     if (open) { setName(''); setDescription('') }
   }, [open])
 
-  function handleSubmit(e: React.FormEvent) {
+  async function handleSubmit(e: React.FormEvent) {
     e.preventDefault()
     const trimmedName = name.trim()
     if (!trimmedName) return
-    const pipeline = createPipeline(trimmedName, description.trim() || undefined)
+    const pipeline = await createPipelineAction({ name: trimmedName, description: description.trim() || undefined })
     onCreated(pipeline)
   }
 

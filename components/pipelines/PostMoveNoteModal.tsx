@@ -3,7 +3,7 @@
 import { useState, useEffect } from 'react'
 import { Modal } from '@/components/ui/Modal'
 import { Button } from '@/components/ui/Button'
-import { createActivityEntry } from '@/lib/activities'
+import { createActivityEntryAction } from '@/app/actions/activities'
 
 interface PostMoveNoteModalProps {
   open: boolean
@@ -42,7 +42,7 @@ export function PostMoveNoteModal({ open, leadId, stageName, onClose, onSaved }:
     return e
   }
 
-  function handleSave() {
+  async function handleSave() {
     const e = validate()
     if (Object.keys(e).length > 0) { setErrors(e); return }
 
@@ -50,7 +50,7 @@ export function PostMoveNoteModal({ open, leadId, stageName, onClose, onSaved }:
       ? { name: attachName.trim(), url: attachUrl.trim() }
       : undefined
 
-    createActivityEntry({
+    await createActivityEntryAction({
       leadId,
       type: 'note',
       title: title.trim(),

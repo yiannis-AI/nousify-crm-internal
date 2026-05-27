@@ -1,16 +1,15 @@
 'use client'
 
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
 import { format, formatDistanceToNowStrict } from 'date-fns'
-import { deleteActivityEntry } from '@/lib/activities'
+import { deleteActivityEntryAction } from '@/app/actions/activities'
 import { DeleteConfirmDialog } from '@/components/leads/DeleteConfirmDialog'
 import { ActivityEntryForm } from './ActivityEntryForm'
 import type { ActivityEntry, ActivityEntryType } from '@/types'
 
 interface ActivityTimelineProps {
   leadId: string
-  entries: ActivityEntry[]
-  onEntriesChange: () => void
+  initialEntries: ActivityEntry[]
 }
 
 const DOT_COLORS: Record<ActivityEntryType, string> = {
@@ -29,7 +28,12 @@ const TYPE_LABELS: Record<ActivityEntryType, string> = {
   client_converted: 'Client conversion',
 }
 
-export function ActivityTimeline({ leadId, entries, onEntriesChange }: ActivityTimelineProps) {
+export function ActivityTimeline({ leadId, initialEntries }: ActivityTimelineProps) {
+  const [entries, setEntries] = useState<ActivityEntry[]>(initialEntries)
+
+  useEffect(() => {
+    setEntries(initialEntries)
+  }, [leadId])
   const [expandedId, setExpandedId] = useState<string | null>(null)
   const [editingEntry, setEditingEntry] = useState<ActivityEntry | null>(null)
   const [deletingEntry, setDeletingEntry] = useState<ActivityEntry | null>(null)
@@ -47,17 +51,24 @@ export function ActivityTimeline({ leadId, entries, onEntriesChange }: ActivityT
     setFormOpen(true)
   }
 
-  function handleDeleteConfirm() {
+  async function handleDeleteConfirm() {
     if (!deletingEntry) return
-    deleteActivityEntry(deletingEntry.id)
-    setDeletingEntry(null)
+    await deleteActivityEntryAction(deletingEntry.id)
+    setEntries((prev) => prev.filter((e) => e.id !== deletingEntry.id))
     if (expandedId === deletingEntry.id) setExpandedId(null)
-    onEntriesChange()
+    setDeletingEntry(null)
   }
 
   function handleFormClose() {
     setFormOpen(false)
     setEditingEntry(null)
+  }
+
+  function handleEntrySaved(saved: ActivityEntry) {
+    setEntries((prev) => {
+      const exists = prev.some((e) => e.id === saved.id)
+      return exists ? prev.map((e) => e.id === saved.id ? saved : e) : [...prev, saved]
+    })
   }
 
   if (entries.length === 0) {
@@ -78,7 +89,7 @@ export function ActivityTimeline({ leadId, entries, onEntriesChange }: ActivityT
           leadId={leadId}
           entry={editingEntry ?? undefined}
           onClose={handleFormClose}
-          onSaved={onEntriesChange}
+          onSaved={handleEntrySaved}
         />
       </>
     )
@@ -86,11 +97,6 @@ export function ActivityTimeline({ leadId, entries, onEntriesChange }: ActivityT
 
   return (
     <>
-      {/*
-        Layout: the outer div is `relative` with no padding — dots and spine
-        share the same coordinate system (both use `left-[17px]`).
-        Content inside each row uses `pl-9` (36px) to clear the rail.
-      */}
       <div className="relative">
         {/* Spine */}
         <div className="absolute left-[17px] top-1 bottom-9 w-px bg-gray-200" />
@@ -99,12 +105,10 @@ export function ActivityTimeline({ leadId, entries, onEntriesChange }: ActivityT
           const isExpanded = expandedId === entry.id
           return (
             <div key={entry.id} className="relative pb-7">
-              {/* Dot centred on spine */}
               <div
                 className={`absolute left-[17px] -translate-x-1/2 top-[5px] w-2.5 h-2.5 rounded-full z-10 ring-2 ring-white ${DOT_COLORS[entry.type]}`}
               />
 
-              {/* Clickable row */}
               <button
                 className="w-full text-left pl-9"
                 onClick={() => setExpandedId(isExpanded ? null : entry.id)}
@@ -135,7 +139,6 @@ export function ActivityTimeline({ leadId, entries, onEntriesChange }: ActivityT
                 </div>
               </button>
 
-              {/* Expanded content */}
               {isExpanded && (
                 <div className="mt-3 pl-9 space-y-3">
                   {entry.description && (
@@ -200,7 +203,7 @@ export function ActivityTimeline({ leadId, entries, onEntriesChange }: ActivityT
         leadId={leadId}
         entry={editingEntry ?? undefined}
         onClose={handleFormClose}
-        onSaved={onEntriesChange}
+        onSaved={handleEntrySaved}
       />
 
       <DeleteConfirmDialog

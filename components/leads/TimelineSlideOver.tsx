@@ -8,26 +8,23 @@ interface TimelineSlideOverProps {
   open: boolean
   leadId: string
   leadName: string
-  entries: ActivityEntry[]
+  initialEntries: ActivityEntry[]
   onClose: () => void
-  onEntriesChange: () => void
 }
 
 export function TimelineSlideOver({
   open,
   leadId,
   leadName,
-  entries,
+  initialEntries,
   onClose,
-  onEntriesChange,
 }: TimelineSlideOverProps) {
   return (
     <SlideOver open={open} onClose={onClose} title={`Tasks — ${leadName}`} size="lg">
       <div className="px-6 py-6">
         <ActivityTimeline
           leadId={leadId}
-          entries={entries}
-          onEntriesChange={onEntriesChange}
+          initialEntries={initialEntries}
         />
       </div>
     </SlideOver>

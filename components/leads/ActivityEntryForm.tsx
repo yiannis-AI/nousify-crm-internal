@@ -3,7 +3,7 @@
 import { useState, useEffect } from 'react'
 import { Modal } from '@/components/ui/Modal'
 import { Button } from '@/components/ui/Button'
-import { createActivityEntry, updateActivityEntry } from '@/lib/activities'
+import { createActivityEntryAction, updateActivityEntryAction } from '@/app/actions/activities'
 import type { ActivityEntry, ActivityEntryType } from '@/types'
 
 interface ActivityEntryFormProps {
@@ -11,7 +11,7 @@ interface ActivityEntryFormProps {
   leadId: string
   entry?: ActivityEntry
   onClose: () => void
-  onSaved: () => void
+  onSaved: (entry: ActivityEntry) => void
 }
 
 export function ActivityEntryForm({ open, leadId, entry, onClose, onSaved }: ActivityEntryFormProps) {
@@ -23,6 +23,7 @@ export function ActivityEntryForm({ open, leadId, entry, onClose, onSaved }: Act
   const [attachUrl, setAttachUrl] = useState('')
   const [showAttach, setShowAttach] = useState(false)
   const [errors, setErrors] = useState<Record<string, string>>({})
+  const [saving, setSaving] = useState(false)
 
   useEffect(() => {
     if (open) {
@@ -55,7 +56,7 @@ export function ActivityEntryForm({ open, leadId, entry, onClose, onSaved }: Act
     return e
   }
 
-  function handleSave() {
+  async function handleSave() {
     const e = validate()
     if (Object.keys(e).length > 0) { setErrors(e); return }
 
@@ -63,26 +64,31 @@ export function ActivityEntryForm({ open, leadId, entry, onClose, onSaved }: Act
       ? { name: attachName.trim(), url: attachUrl.trim() }
       : undefined
 
-    if (isEdit && entry) {
-      updateActivityEntry(entry.id, {
-        type,
-        title: title.trim(),
-        description: description.trim() || undefined,
-        attachment,
-      })
-    } else {
-      createActivityEntry({
-        leadId,
-        type,
-        title: title.trim(),
-        description: description.trim() || undefined,
-        attachment,
-        systemGenerated: false,
-      })
+    setSaving(true)
+    try {
+      let saved: ActivityEntry
+      if (isEdit && entry) {
+        saved = await updateActivityEntryAction(entry.id, {
+          type,
+          title: title.trim(),
+          description: description.trim() || undefined,
+          attachment,
+        })
+      } else {
+        saved = await createActivityEntryAction({
+          leadId,
+          type,
+          title: title.trim(),
+          description: description.trim() || undefined,
+          attachment,
+          systemGenerated: false,
+        })
+      }
+      onSaved(saved)
+      onClose()
+    } finally {
+      setSaving(false)
     }
-
-    onSaved()
-    onClose()
   }
 
   const inputClass = (field?: string) =>
@@ -99,7 +105,6 @@ export function ActivityEntryForm({ open, leadId, entry, onClose, onSaved }: Act
       title={isEdit ? 'Edit entry' : 'New entry'}
     >
       <div className="space-y-4">
-        {/* Type toggle — only in create mode */}
         {!isEdit && (
           <div className="flex gap-2">
             {(['note', 'document'] as const).map((t) => (
@@ -118,7 +123,6 @@ export function ActivityEntryForm({ open, leadId, entry, onClose, onSaved }: Act
           </div>
         )}
 
-        {/* Title */}
         <div>
           <div className="flex items-center justify-between mb-1">
             <label className="text-xs text-gray-500">Title <span className="text-red-400">*</span></label>
@@ -136,7 +140,6 @@ export function ActivityEntryForm({ open, leadId, entry, onClose, onSaved }: Act
           {errors.title && <p className="text-xs text-red-500 mt-1">{errors.title}</p>}
         </div>
 
-        {/* Description */}
         <div>
           <label className="block text-xs text-gray-500 mb-1">Description <span className="text-gray-400">(optional)</span></label>
           <textarea
@@ -148,7 +151,6 @@ export function ActivityEntryForm({ open, leadId, entry, onClose, onSaved }: Act
           />
         </div>
 
-        {/* Attachment — always shown for document, toggleable for note */}
         {effectiveType === 'document' ? (
           <div className="space-y-2">
             <label className="block text-xs text-gray-500">Document link</label>
@@ -200,8 +202,10 @@ export function ActivityEntryForm({ open, leadId, entry, onClose, onSaved }: Act
       </div>
 
       <div className="flex justify-end gap-3 mt-6">
-        <Button variant="secondary" onClick={onClose}>Cancel</Button>
-        <Button onClick={handleSave}>{isEdit ? 'Save changes' : 'Add entry'}</Button>
+        <Button variant="secondary" onClick={onClose} disabled={saving}>Cancel</Button>
+        <Button onClick={handleSave} disabled={saving}>
+          {saving ? 'Saving…' : isEdit ? 'Save changes' : 'Add entry'}
+        </Button>
       </div>
     </Modal>
   )

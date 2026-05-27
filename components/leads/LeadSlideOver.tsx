@@ -6,47 +6,57 @@ import { SlideOver } from '@/components/ui/SlideOver'
 import { Modal } from '@/components/ui/Modal'
 import { Button } from '@/components/ui/Button'
 import { AddClientModal } from '@/components/clients/AddClientModal'
-import { db } from '@/lib/storage'
-import { createLead, updateLead, emptyLeadForm, findLeadByEmail } from '@/lib/leads'
-import { getPipelines, getStages, getEntries, addLeadToPipeline, moveEntry, removeEntry } from '@/lib/pipelines'
-import { createActivityEntry, createLeadCreatedEntry, createStageChangeEntry } from '@/lib/activities'
-import type { Lead, LeadFormData, CustomFieldDefinition, LeadQuality, Pipeline, PipelineStage, PipelineEntry } from '@/types'
+import { createLeadAction, updateLeadAction } from '@/app/actions/leads'
+import { addLeadToPipelineAction, moveLeadToStageAction, removeLeadFromPipelineAction } from '@/app/actions/pipelines'
+import { createActivityEntryAction, createStageChangeEntryAction } from '@/app/actions/activities'
+import type { Lead, LeadFormData, CustomFieldDefinition, LeadQuality, Pipeline, PipelineStage } from '@/types'
+
+function emptyLeadForm(): LeadFormData {
+  return {
+    firstName: '', lastName: '', email: '', phone: '', website: '',
+    company: '', jobTitle: '', pipelineId: '', stageId: '',
+    estimatedValue: '', leadQuality: '', notes: '', customFields: {},
+  }
+}
 
 interface LeadSlideOverProps {
   open: boolean
   lead: Lead | null
+  pipelines: Pipeline[]
+  allStages: PipelineStage[]
+  customFields: CustomFieldDefinition[]
+  allLeads: Lead[]
   onClose: () => void
-  onSaved: () => void
+  onSaved: (lead: Lead) => void
 }
 
-export function LeadSlideOver({ open, lead, onClose, onSaved }: LeadSlideOverProps) {
+export function LeadSlideOver({
+  open, lead, pipelines, allStages, customFields, allLeads, onClose, onSaved,
+}: LeadSlideOverProps) {
   const isEdit = !!lead
   const [form, setForm] = useState<LeadFormData>(emptyLeadForm())
-  const [customFields, setCustomFields] = useState<CustomFieldDefinition[]>([])
   const [errors, setErrors] = useState<Record<string, string>>({})
   const [duplicateLead, setDuplicateLead] = useState<Lead | null>(null)
   const [showDuplicateConfirm, setShowDuplicateConfirm] = useState(false)
   const [convertOpen, setConvertOpen] = useState(false)
+  const [saving, setSaving] = useState(false)
 
   // Create-mode only: initial note + optional document
   const [initialNote, setInitialNote] = useState('')
   const [docName, setDocName] = useState('')
   const [docUrl, setDocUrl] = useState('')
 
-  // Pipeline/Stage selectors
-  const [pipelines, setPipelines] = useState<Pipeline[]>([])
-  const [pipelinesWithStages, setPipelinesWithStages] = useState<Set<string>>(new Set())
-  const [stages, setStages] = useState<PipelineStage[]>([])
-  // Existing entry for this lead (edit mode only)
-  const [existingEntry, setExistingEntry] = useState<PipelineEntry | null>(null)
+  // Stages filtered by selected pipeline
+  const stages = form.pipelineId
+    ? allStages.filter((s) => s.pipelineId === form.pipelineId)
+    : []
+
+  const pipelinesWithStages = new Set(
+    pipelines.filter((p) => allStages.some((s) => s.pipelineId === p.id)).map((p) => p.id)
+  )
 
   useEffect(() => {
     if (open) {
-      setCustomFields(db.getCustomFields())
-      const allPipelines = getPipelines()
-      setPipelines(allPipelines)
-      setPipelinesWithStages(new Set(allPipelines.filter((p) => getStages(p.id).length > 0).map((p) => p.id)))
-
       if (lead) {
         setForm({
           firstName: lead.firstName,
@@ -63,18 +73,8 @@ export function LeadSlideOver({ open, lead, onClose, onSaved }: LeadSlideOverPro
           notes: lead.notes,
           customFields: { ...lead.customFields },
         })
-        if (lead.pipelineId) {
-          setStages(getStages(lead.pipelineId))
-          const entries = getEntries(lead.pipelineId)
-          setExistingEntry(entries.find((e) => e.leadId === lead.id) ?? null)
-        } else {
-          setStages([])
-          setExistingEntry(null)
-        }
       } else {
         setForm(emptyLeadForm())
-        setStages([])
-        setExistingEntry(null)
         setInitialNote('')
         setDocName('')
         setDocUrl('')
@@ -93,7 +93,6 @@ export function LeadSlideOver({ open, lead, onClose, onSaved }: LeadSlideOverPro
 
   function handlePipelineChange(pipelineId: string) {
     setForm((prev) => ({ ...prev, pipelineId, stageId: '' }))
-    setStages(pipelineId ? getStages(pipelineId) : [])
   }
 
   function setCustomField(id: string, value: string) {
@@ -104,7 +103,11 @@ export function LeadSlideOver({ open, lead, onClose, onSaved }: LeadSlideOverPro
   }
 
   function handleEmailBlur() {
-    const match = findLeadByEmail(form.email, lead?.id)
+    const email = form.email.trim().toLowerCase()
+    if (!email) return
+    const match = allLeads.find(
+      (l) => l.email.toLowerCase() === email && l.id !== lead?.id
+    )
     setDuplicateLead(match ?? null)
   }
 
@@ -119,109 +122,115 @@ export function LeadSlideOver({ open, lead, onClose, onSaved }: LeadSlideOverPro
     const e = validate()
     if (Object.keys(e).length > 0) { setErrors(e); return }
 
-    const match = findLeadByEmail(form.email, lead?.id)
-    if (match && !isEdit) {
-      setDuplicateLead(match)
-      setShowDuplicateConfirm(true)
-      return
+    if (!isEdit && form.email.trim()) {
+      const match = allLeads.find(
+        (l) => l.email.toLowerCase() === form.email.trim().toLowerCase()
+      )
+      if (match) {
+        setDuplicateLead(match)
+        setShowDuplicateConfirm(true)
+        return
+      }
     }
 
     persist()
   }
 
-  function persist() {
-    let savedLead: Lead
-    if (isEdit && lead) {
-      savedLead = updateLead(lead.id, form)
+  async function persist() {
+    setSaving(true)
+    try {
+      let savedLead: Lead
 
-      // Log stage change silently if stage moved
-      const prevStageId = existingEntry?.stageId ?? ''
-      const newStageIdEdit = form.stageId
-      if (newStageIdEdit && newStageIdEdit !== prevStageId && form.pipelineId) {
-        const pipeline = pipelines.find((p) => p.id === form.pipelineId)
-        const newStage = stages.find((s) => s.id === newStageIdEdit)
-        if (pipeline && newStage) {
-          createStageChangeEntry({
+      if (isEdit && lead) {
+        savedLead = await updateLeadAction(lead.id, form)
+
+        // Sync pipeline assignment
+        const prevPipelineId = lead.pipelineId ?? ''
+        const prevStageId = lead.stageId ?? ''
+        const newPipelineId = form.pipelineId
+        const newStageId = form.stageId
+
+        if (prevPipelineId && !newPipelineId) {
+          await removeLeadFromPipelineAction(lead.id)
+        } else if (newPipelineId && newStageId) {
+          if (!prevPipelineId) {
+            await addLeadToPipelineAction(lead.id, newPipelineId, newStageId)
+          } else if (newPipelineId !== prevPipelineId) {
+            await removeLeadFromPipelineAction(lead.id)
+            await addLeadToPipelineAction(lead.id, newPipelineId, newStageId)
+          } else if (newStageId !== prevStageId) {
+            await moveLeadToStageAction(lead.id, newStageId)
+          }
+        }
+
+        // Log stage change if stage moved
+        if (newStageId && newStageId !== prevStageId && newPipelineId) {
+          const pipeline = pipelines.find((p) => p.id === newPipelineId)
+          const newStage = allStages.find((s) => s.id === newStageId)
+          if (pipeline && newStage) {
+            await createStageChangeEntryAction({
+              leadId: lead.id,
+              pipelineId: newPipelineId,
+              pipelineName: pipeline.name,
+              newStageName: newStage.name,
+              previousStageId: prevStageId || undefined,
+              newStageId,
+            })
+          }
+        }
+      } else {
+        savedLead = await createLeadAction(form)
+
+        // Log lead_created
+        await createActivityEntryAction({
+          leadId: savedLead.id,
+          type: 'lead_created',
+          title: 'Lead created',
+          systemGenerated: true,
+        })
+
+        // Log initial note if provided
+        if (initialNote.trim()) {
+          await createActivityEntryAction({
             leadId: savedLead.id,
-            pipelineId: form.pipelineId,
-            pipelineName: pipeline.name,
-            newStageName: newStage.name,
-            previousStageId: prevStageId || undefined,
-            newStageId: newStageIdEdit,
+            type: 'note',
+            title: 'Initial note',
+            description: initialNote.trim(),
+            systemGenerated: false,
           })
         }
-      }
-    } else {
-      savedLead = createLead(form)
 
-      // Always log lead_created
-      createLeadCreatedEntry(savedLead.id)
-
-      // Log initial note if provided
-      if (initialNote.trim()) {
-        createActivityEntry({
-          leadId: savedLead.id,
-          type: 'note',
-          title: 'Initial note',
-          description: initialNote.trim(),
-          systemGenerated: false,
-        })
-      }
-
-      // Log document if both fields filled
-      if (docName.trim() && docUrl.trim()) {
-        createActivityEntry({
-          leadId: savedLead.id,
-          type: 'document',
-          title: docName.trim(),
-          attachment: { name: docName.trim(), url: docUrl.trim() },
-          systemGenerated: false,
-        })
-      }
-
-      // Log stage assignment if pipeline+stage selected
-      if (form.pipelineId && form.stageId) {
-        const pipeline = pipelines.find((p) => p.id === form.pipelineId)
-        const stage = stages.find((s) => s.id === form.stageId)
-        if (pipeline && stage) {
-          createStageChangeEntry({
+        // Log document if both fields filled
+        if (docName.trim() && docUrl.trim()) {
+          await createActivityEntryAction({
             leadId: savedLead.id,
-            pipelineId: form.pipelineId,
-            pipelineName: pipeline.name,
-            newStageName: stage.name,
-            newStageId: form.stageId,
+            type: 'document',
+            title: docName.trim(),
+            attachment: { name: docName.trim(), url: docUrl.trim() },
+            systemGenerated: false,
           })
         }
-      }
-    }
 
-    // Sync PipelineEntry
-    const newPipelineId = form.pipelineId
-    const newStageId = form.stageId
-
-    if (existingEntry) {
-      if (!newPipelineId) {
-        // Cleared pipeline — remove entry (storage also clears lead fields)
-        removeEntry(existingEntry.id)
-      } else if (newPipelineId !== existingEntry.pipelineId) {
-        // Changed to a different pipeline
-        removeEntry(existingEntry.id)
-        if (newStageId) {
-          const stageEntries = getEntries(newPipelineId).filter((e) => e.stageId === newStageId)
-          addLeadToPipeline(newPipelineId, newStageId, savedLead.id, stageEntries.length)
+        // Log stage assignment if pipeline+stage selected
+        if (form.pipelineId && form.stageId) {
+          const pipeline = pipelines.find((p) => p.id === form.pipelineId)
+          const stage = allStages.find((s) => s.id === form.stageId)
+          if (pipeline && stage) {
+            await createStageChangeEntryAction({
+              leadId: savedLead.id,
+              pipelineId: form.pipelineId,
+              pipelineName: pipeline.name,
+              newStageName: stage.name,
+              newStageId: form.stageId,
+            })
+          }
         }
-      } else if (newStageId && newStageId !== existingEntry.stageId) {
-        // Same pipeline, different stage
-        moveEntry(existingEntry.id, newStageId, existingEntry.order)
       }
-    } else if (newPipelineId && newStageId) {
-      // No existing entry — create one
-      const stageEntries = getEntries(newPipelineId).filter((e) => e.stageId === newStageId)
-      addLeadToPipeline(newPipelineId, newStageId, savedLead.id, stageEntries.length)
-    }
 
-    onSaved()
-    onClose()
+      onSaved(savedLead)
+    } finally {
+      setSaving(false)
+    }
   }
 
   const inputClass = (field?: string) =>
@@ -451,20 +460,27 @@ export function LeadSlideOver({ open, lead, onClose, onSaved }: LeadSlideOverPro
             <div />
           )}
           <div className="flex gap-3">
-            <Button variant="secondary" onClick={onClose}>Cancel</Button>
-            <Button onClick={handleSubmit}>{isEdit ? 'Save changes' : 'Create lead'}</Button>
+            <Button variant="secondary" onClick={onClose} disabled={saving}>Cancel</Button>
+            <Button onClick={handleSubmit} disabled={saving}>
+              {saving ? 'Saving…' : isEdit ? 'Save changes' : 'Create lead'}
+            </Button>
           </div>
         </div>
       </SlideOver>
 
       <AddClientModal
         open={convertOpen}
+        allLeads={allLeads.filter((l) => !l.isClient)}
+        customFields={[]}
         preselectedLead={lead}
         onClose={() => setConvertOpen(false)}
-        onAdded={() => { setConvertOpen(false); onClose(); onSaved() }}
+        onAdded={() => {
+          if (lead) onSaved({ ...lead, isClient: true })
+          setConvertOpen(false)
+          onClose()
+        }}
       />
 
-      {/* Duplicate confirmation — rendered outside SlideOver so it stacks on top */}
       <Modal
         open={showDuplicateConfirm}
         onClose={() => setShowDuplicateConfirm(false)}

@@ -1,19 +1,19 @@
 'use client'
 
-import { useState, useRef, useEffect } from 'react'
-import { v4 as uuidv4 } from 'uuid'
+import { useState, useRef } from 'react'
 import Papa from 'papaparse'
 import { Modal } from '@/components/ui/Modal'
 import { Button } from '@/components/ui/Button'
-import { createLead, findLeadByEmail, emptyLeadForm } from '@/lib/leads'
-import { createLeadCreatedEntry } from '@/lib/activities'
-import { db } from '@/lib/storage'
-import type { LeadFormData, LeadQuality, CustomFieldDefinition } from '@/types'
+import { importLeadsAction } from '@/app/actions/leads'
+import { saveLeadCustomFieldsAction } from '@/app/actions/custom-fields'
+import type { Lead, LeadFormData, LeadQuality, CustomFieldDefinition } from '@/types'
 
 interface ImportLeadsModalProps {
   open: boolean
+  customFields: CustomFieldDefinition[]
+  allLeads: Lead[]
   onClose: () => void
-  onImported: () => void
+  onImported: (leads: Lead[]) => void
 }
 
 const BUILT_IN_FIELDS: { key: string; label: string }[] = [
@@ -45,21 +45,26 @@ const CREATE_SENTINEL = '__create__'
 
 const inputClass = 'w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-gray-900 focus:border-transparent'
 
-export function ImportLeadsModal({ open, onClose, onImported }: ImportLeadsModalProps) {
+function emptyLeadForm(): LeadFormData {
+  return {
+    firstName: '', lastName: '', email: '', phone: '', website: '',
+    company: '', jobTitle: '', pipelineId: '', stageId: '',
+    estimatedValue: '', leadQuality: '', notes: '', customFields: {},
+  }
+}
+
+export function ImportLeadsModal({ open, customFields, allLeads, onClose, onImported }: ImportLeadsModalProps) {
   const [step, setStep] = useState<Step>('upload')
   const [csvHeaders, setCsvHeaders] = useState<string[]>([])
   const [csvRows, setCsvRows] = useState<Record<string, string>[]>([])
   const [mapping, setMapping] = useState<Record<string, string>>({})
-  const [customFieldDefs, setCustomFieldDefs] = useState<CustomFieldDefinition[]>([])
+  const [customFieldDefs, setCustomFieldDefs] = useState<CustomFieldDefinition[]>(customFields)
   const [creatingFor, setCreatingFor] = useState<string | null>(null)
   const [newFieldName, setNewFieldName] = useState('')
   const [dragOver, setDragOver] = useState(false)
   const [result, setResult] = useState<{ imported: number; skipped: number } | null>(null)
+  const [importing, setImporting] = useState(false)
   const fileRef = useRef<HTMLInputElement>(null)
-
-  useEffect(() => {
-    if (open) setCustomFieldDefs(db.getCustomFields())
-  }, [open])
 
   function reset() {
     setStep('upload')
@@ -70,6 +75,7 @@ export function ImportLeadsModal({ open, onClose, onImported }: ImportLeadsModal
     setDragOver(false)
     setCreatingFor(null)
     setNewFieldName('')
+    setCustomFieldDefs(customFields)
   }
 
   function handleClose() { reset(); onClose() }
@@ -112,15 +118,16 @@ export function ImportLeadsModal({ open, onClose, onImported }: ImportLeadsModal
     }
   }
 
-  function handleCreateField(header: string) {
+  async function handleCreateField(header: string) {
     const name = newFieldName.trim()
     if (!name) return
-    const existing = db.getCustomFields()
-    const newField: CustomFieldDefinition = { id: uuidv4(), name, type: 'text' }
-    const updated = [...existing, newField]
-    db.saveCustomFields(updated)
-    setCustomFieldDefs(updated)
-    setMapping((prev) => ({ ...prev, [header]: `custom_${newField.id}` }))
+    const newField: CustomFieldDefinition = { id: '', name, type: 'text' }
+    const updated = await saveLeadCustomFieldsAction([...customFieldDefs, newField])
+    const created = updated.find((f) => f.name === name && !customFieldDefs.some((c) => c.id === f.id))
+    if (created) {
+      setCustomFieldDefs(updated)
+      setMapping((prev) => ({ ...prev, [header]: `custom_${created.id}` }))
+    }
     setCreatingFor(null)
     setNewFieldName('')
   }
@@ -150,26 +157,33 @@ export function ImportLeadsModal({ open, onClose, onImported }: ImportLeadsModal
   })
 
   const emailCol = Object.entries(mapping).find(([, v]) => v === 'email')?.[0]
+  const existingEmails = new Set(allLeads.map((l) => l.email.toLowerCase()))
   const duplicateCount = emailCol
     ? validRows.filter((row) => {
-        const email = (row[emailCol] ?? '').trim()
-        return email && !!findLeadByEmail(email)
+        const email = (row[emailCol] ?? '').trim().toLowerCase()
+        return email && existingEmails.has(email)
       }).length
     : 0
   const toImport = validRows.length - duplicateCount
   const skippedNoName = csvRows.length - validRows.length
 
-  function handleImport() {
-    let imported = 0; let skipped = 0
-    validRows.forEach((row) => {
-      const emailVal = emailCol ? (row[emailCol] ?? '').trim() : ''
-      if (emailVal && findLeadByEmail(emailVal)) { skipped++; return }
-      const lead = createLead(buildLead(row))
-      createLeadCreatedEntry(lead.id)
-      imported++
-    })
-    setResult({ imported, skipped })
-    onImported()
+  async function handleImport() {
+    setImporting(true)
+    try {
+      const rowsToImport = validRows.filter((row) => {
+        if (!emailCol) return true
+        const email = (row[emailCol] ?? '').trim().toLowerCase()
+        return !email || !existingEmails.has(email)
+      })
+      const skipped = validRows.length - rowsToImport.length
+
+      const leadsData = rowsToImport.map((row) => buildLead(row))
+      const imported = await importLeadsAction(leadsData)
+      setResult({ imported: imported.length, skipped })
+      onImported(imported)
+    } finally {
+      setImporting(false)
+    }
   }
 
   const firstNameMapped = Object.values(mapping).includes('firstName')
@@ -263,31 +277,31 @@ export function ImportLeadsModal({ open, onClose, onImported }: ImportLeadsModal
                     </div>
                   ) : (
                     <div className="relative flex-1">
-                    <select
-                      value={mapping[header] ?? ''}
-                      onChange={(e) => handleMappingChange(header, e.target.value)}
-                      className="w-full appearance-none border border-gray-200 rounded-lg pl-3 pr-8 py-2 text-sm bg-white text-gray-700 focus:outline-none focus:border-gray-400 focus:ring-1 focus:ring-gray-400 transition-colors"
-                    >
-                      <option value="">Skip this column</option>
-                      <optgroup label="Lead fields">
-                        {allFields.map((f) => (
-                          <option key={f.key} value={f.key}>{f.label}</option>
-                        ))}
-                      </optgroup>
-                      <optgroup label="Create">
-                        <option value={CREATE_SENTINEL}>+ Create new field…</option>
-                      </optgroup>
-                    </select>
-                    <svg className="pointer-events-none absolute right-2.5 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
-                    </svg>
+                      <select
+                        value={mapping[header] ?? ''}
+                        onChange={(e) => handleMappingChange(header, e.target.value)}
+                        className="w-full appearance-none border border-gray-200 rounded-lg pl-3 pr-8 py-2 text-sm bg-white text-gray-700 focus:outline-none focus:border-gray-400 focus:ring-1 focus:ring-gray-400 transition-colors"
+                      >
+                        <option value="">Skip this column</option>
+                        <optgroup label="Lead fields">
+                          {allFields.map((f) => (
+                            <option key={f.key} value={f.key}>{f.label}</option>
+                          ))}
+                        </optgroup>
+                        <optgroup label="Create">
+                          <option value={CREATE_SENTINEL}>+ Create new field…</option>
+                        </optgroup>
+                      </select>
+                      <svg className="pointer-events-none absolute right-2.5 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
+                      </svg>
                     </div>
                   )}
                 </div>
                 {mapping[header]?.startsWith('custom_') && (() => {
                   const cfName = customFieldDefs.find((cf) => `custom_${cf.id}` === mapping[header])?.name
                   return cfName ? (
-                    <p className="text-xs text-emerald-600 ml-[calc(160px+28px)] mt-1">New field "{cfName}" will be created</p>
+                    <p className="text-xs text-emerald-600 ml-[calc(160px+28px)] mt-1">Custom field &quot;{cfName}&quot;</p>
                   ) : null
                 })()}
               </div>
@@ -371,8 +385,8 @@ export function ImportLeadsModal({ open, onClose, onImported }: ImportLeadsModal
             </Button>
             <div className="flex gap-3">
               <Button variant="secondary" onClick={handleClose}>Cancel</Button>
-              <Button onClick={handleImport} disabled={toImport === 0}>
-                Import {toImport} lead{toImport !== 1 ? 's' : ''}
+              <Button onClick={handleImport} disabled={toImport === 0 || importing}>
+                {importing ? 'Importing…' : `Import ${toImport} lead${toImport !== 1 ? 's' : ''}`}
               </Button>
             </div>
           </div>

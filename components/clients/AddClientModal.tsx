@@ -3,44 +3,43 @@
 import { useState, useEffect } from 'react'
 import { Modal } from '@/components/ui/Modal'
 import { Button } from '@/components/ui/Button'
-import { getLeads } from '@/lib/leads'
-import { createClient, getClientCustomFields } from '@/lib/clients'
-import { createClientConvertedEntry, createActivityEntry } from '@/lib/activities'
-import type { Lead, ClientStatus, CustomFieldDefinition } from '@/types'
+import { createClientAction } from '@/app/actions/clients'
+import { createActivityEntryAction } from '@/app/actions/activities'
+import type { Lead, Client, ClientStatus, CustomFieldDefinition } from '@/types'
 
 interface AddClientModalProps {
   open: boolean
-  onClose: () => void
-  onAdded: () => void
+  allLeads: Lead[]
+  customFields: CustomFieldDefinition[]
   preselectedLead?: Lead | null
+  onClose: () => void
+  onAdded: (client: Client) => void
 }
 
 const inputClass = 'w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-gray-900 focus:border-transparent'
 
-export function AddClientModal({ open, onClose, onAdded, preselectedLead }: AddClientModalProps) {
+export function AddClientModal({
+  open, allLeads, customFields, preselectedLead, onClose, onAdded,
+}: AddClientModalProps) {
   const [step, setStep] = useState<'search' | 'confirm'>('search')
   const [search, setSearch] = useState('')
-  const [leads, setLeads] = useState<Lead[]>([])
   const [selectedLead, setSelectedLead] = useState<Lead | null>(null)
   const [contractValue, setContractValue] = useState('')
   const [clientSince, setClientSince] = useState(new Date().toISOString().split('T')[0])
   const [renewalDate, setRenewalDate] = useState('')
   const [status, setStatus] = useState<ClientStatus>('active')
-  const [customFields, setCustomFields] = useState<CustomFieldDefinition[]>([])
   const [customFieldValues, setCustomFieldValues] = useState<Record<string, string>>({})
   const [initialNote, setInitialNote] = useState('')
   const [docName, setDocName] = useState('')
   const [docUrl, setDocUrl] = useState('')
+  const [saving, setSaving] = useState(false)
 
   useEffect(() => {
     if (open) {
-      setLeads(getLeads().filter((l) => !l.isClient))
       setContractValue('')
       setClientSince(new Date().toISOString().split('T')[0])
       setRenewalDate('')
       setStatus('active')
-      const cfs = getClientCustomFields()
-      setCustomFields(cfs)
       setCustomFieldValues({})
       setInitialNote('')
       setDocName('')
@@ -56,7 +55,7 @@ export function AddClientModal({ open, onClose, onAdded, preselectedLead }: AddC
     }
   }, [open, preselectedLead])
 
-  const filtered = leads.filter((l) => {
+  const filtered = allLeads.filter((l) => {
     const q = search.toLowerCase()
     return (
       !q ||
@@ -76,37 +75,47 @@ export function AddClientModal({ open, onClose, onAdded, preselectedLead }: AddC
     setSelectedLead(null)
   }
 
-  function handleConfirm() {
+  async function handleConfirm() {
     if (!selectedLead) return
-    createClient({
-      leadId: selectedLead.id,
-      contractValue,
-      clientSince,
-      renewalDate,
-      status,
-      customFields: customFieldValues,
-    })
-    createClientConvertedEntry(selectedLead.id)
-    if (initialNote.trim()) {
-      createActivityEntry({
+    setSaving(true)
+    try {
+      const client = await createClientAction({
         leadId: selectedLead.id,
-        type: 'note',
-        title: 'Initial note',
-        description: initialNote.trim(),
-        systemGenerated: false,
+        contractValue,
+        clientSince,
+        renewalDate,
+        status,
+        customFields: customFieldValues,
       })
-    }
-    if (docName.trim() && docUrl.trim()) {
-      createActivityEntry({
+      await createActivityEntryAction({
         leadId: selectedLead.id,
-        type: 'document',
-        title: docName.trim(),
-        attachment: { name: docName.trim(), url: docUrl.trim() },
-        systemGenerated: false,
+        type: 'client_converted',
+        title: 'Converted to client',
+        systemGenerated: true,
       })
+      if (initialNote.trim()) {
+        await createActivityEntryAction({
+          leadId: selectedLead.id,
+          type: 'note',
+          title: 'Initial note',
+          description: initialNote.trim(),
+          systemGenerated: false,
+        })
+      }
+      if (docName.trim() && docUrl.trim()) {
+        await createActivityEntryAction({
+          leadId: selectedLead.id,
+          type: 'document',
+          title: docName.trim(),
+          attachment: { name: docName.trim(), url: docUrl.trim() },
+          systemGenerated: false,
+        })
+      }
+      onAdded(client)
+      onClose()
+    } finally {
+      setSaving(false)
     }
-    onAdded()
-    onClose()
   }
 
   return (
@@ -124,7 +133,7 @@ export function AddClientModal({ open, onClose, onAdded, preselectedLead }: AddC
           <div className="max-h-72 overflow-y-auto -mx-1">
             {filtered.length === 0 ? (
               <p className="text-sm text-gray-400 text-center py-8">
-                {leads.length === 0 ? 'No leads available to convert.' : 'No leads match your search.'}
+                {allLeads.length === 0 ? 'No leads available to convert.' : 'No leads match your search.'}
               </p>
             ) : (
               filtered.map((lead) => (
@@ -154,7 +163,6 @@ export function AddClientModal({ open, onClose, onAdded, preselectedLead }: AddC
         </div>
       ) : (
         <div className="flex flex-col gap-5">
-          {/* Selected lead summary */}
           <div className="rounded-lg bg-gray-50 px-4 py-3 border border-gray-100">
             <p className="text-xs font-medium text-gray-400 uppercase tracking-wide mb-1">Converting lead</p>
             <p className="text-sm font-medium text-gray-900">
@@ -165,7 +173,6 @@ export function AddClientModal({ open, onClose, onAdded, preselectedLead }: AddC
             </p>
           </div>
 
-          {/* Client fields */}
           <div>
             <p className="text-xs font-medium text-gray-400 uppercase tracking-wide mb-3">Client details</p>
             <div className="grid grid-cols-2 gap-3">
@@ -213,7 +220,6 @@ export function AddClientModal({ open, onClose, onAdded, preselectedLead }: AddC
             </div>
           </div>
 
-          {/* Custom fields */}
           {customFields.length > 0 && (
             <div>
               <p className="text-xs font-medium text-gray-400 uppercase tracking-wide mb-3">Custom fields</p>
@@ -246,7 +252,6 @@ export function AddClientModal({ open, onClose, onAdded, preselectedLead }: AddC
             </div>
           )}
 
-          {/* Note + document */}
           <div>
             <p className="text-xs font-medium text-gray-400 uppercase tracking-wide mb-3">Note (optional)</p>
             <textarea
@@ -275,15 +280,17 @@ export function AddClientModal({ open, onClose, onAdded, preselectedLead }: AddC
           </div>
 
           <div className="flex justify-between">
-            <Button variant="ghost" size="sm" onClick={handleBack}>
+            <Button variant="ghost" size="sm" onClick={handleBack} disabled={!!preselectedLead}>
               <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 19l-7-7 7-7" />
               </svg>
               Back
             </Button>
             <div className="flex gap-3">
-              <Button variant="secondary" onClick={onClose}>Cancel</Button>
-              <Button onClick={handleConfirm}>Add client</Button>
+              <Button variant="secondary" onClick={onClose} disabled={saving}>Cancel</Button>
+              <Button onClick={handleConfirm} disabled={saving}>
+                {saving ? 'Adding…' : 'Add client'}
+              </Button>
             </div>
           </div>
         </div>

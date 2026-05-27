@@ -4,55 +4,70 @@ import { useState, useEffect } from 'react'
 import { SlideOver } from '@/components/ui/SlideOver'
 import { Button } from '@/components/ui/Button'
 import { TimelineSlideOver } from '@/components/leads/TimelineSlideOver'
-import { updateClient, getClientCustomFields } from '@/lib/clients'
-import { getLeadById } from '@/lib/leads'
-import { getActivityEntries } from '@/lib/activities'
+import { updateClientAction } from '@/app/actions/clients'
+import { getActivityEntriesAction } from '@/app/actions/activities'
 import type { Client, ClientStatus, Lead, ActivityEntry, CustomFieldDefinition } from '@/types'
 
 interface ClientSlideOverProps {
   open: boolean
   client: Client | null
+  lead: Lead | null
+  customFields: CustomFieldDefinition[]
   onClose: () => void
-  onSaved: () => void
+  onSaved: (client: Client) => void
 }
 
 const inputClass = 'w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-gray-900 focus:border-transparent'
 
-export function ClientSlideOver({ open, client, onClose, onSaved }: ClientSlideOverProps) {
-  const [lead, setLead] = useState<Lead | null>(null)
+export function ClientSlideOver({ open, client, lead, customFields, onClose, onSaved }: ClientSlideOverProps) {
   const [contractValue, setContractValue] = useState('')
   const [clientSince, setClientSince] = useState('')
   const [renewalDate, setRenewalDate] = useState('')
   const [status, setStatus] = useState<ClientStatus>('active')
-  const [customFields, setCustomFields] = useState<CustomFieldDefinition[]>([])
   const [customFieldValues, setCustomFieldValues] = useState<Record<string, string>>({})
+  const [saving, setSaving] = useState(false)
   const [timelineOpen, setTimelineOpen] = useState(false)
   const [timelineEntries, setTimelineEntries] = useState<ActivityEntry[]>([])
+  const [timelineLoading, setTimelineLoading] = useState(false)
 
   useEffect(() => {
     if (open && client) {
-      setLead(getLeadById(client.leadId) ?? null)
       setContractValue(client.contractValue)
       setClientSince(client.clientSince)
       setRenewalDate(client.renewalDate)
       setStatus(client.status)
-      const cfs = getClientCustomFields()
-      setCustomFields(cfs)
       setCustomFieldValues({ ...client.customFields })
     }
   }, [open, client])
 
-  function handleSave() {
+  async function handleSave() {
     if (!client) return
-    updateClient(client.id, { contractValue, clientSince, renewalDate, status, customFields: customFieldValues })
-    onSaved()
-    onClose()
+    setSaving(true)
+    try {
+      const updated = await updateClientAction(client.id, {
+        contractValue,
+        clientSince,
+        renewalDate,
+        status,
+        customFields: customFieldValues,
+      })
+      onSaved(updated)
+      onClose()
+    } finally {
+      setSaving(false)
+    }
   }
 
-  function handleViewTimeline() {
+  async function handleViewTimeline() {
     if (!client) return
-    setTimelineEntries(getActivityEntries(client.leadId))
-    setTimelineOpen(true)
+    setTimelineLoading(true)
+    try {
+      const entries = await getActivityEntriesAction(client.leadId)
+      setTimelineEntries(entries)
+      setTimelineOpen(true)
+    } finally {
+      setTimelineLoading(false)
+    }
   }
 
   const leadName = lead ? `${lead.firstName} ${lead.lastName}` : ''
@@ -61,7 +76,6 @@ export function ClientSlideOver({ open, client, onClose, onSaved }: ClientSlideO
     <>
       <SlideOver open={open} onClose={onClose} title={leadName || 'Client'} size="lg">
         <div className="px-6 py-4 flex flex-col gap-5">
-          {/* Contact — read-only from lead */}
           <Section label="Contact">
             <div className="space-y-1 text-sm">
               <Row label="Name" value={leadName} />
@@ -85,7 +99,6 @@ export function ClientSlideOver({ open, client, onClose, onSaved }: ClientSlideO
             </div>
           </Section>
 
-          {/* Client details — editable */}
           <Section label="Client details">
             <div className="grid grid-cols-2 gap-3">
               <div>
@@ -132,7 +145,6 @@ export function ClientSlideOver({ open, client, onClose, onSaved }: ClientSlideO
             </div>
           </Section>
 
-          {/* Custom fields */}
           {customFields.length > 0 && (
             <Section label="Custom fields">
               <div className="space-y-3">
@@ -164,23 +176,25 @@ export function ClientSlideOver({ open, client, onClose, onSaved }: ClientSlideO
             </Section>
           )}
 
-          {/* Timeline shortcut */}
           <div>
             <button
               onClick={handleViewTimeline}
-              className="flex items-center gap-2 text-sm text-gray-500 hover:text-gray-900 transition-colors"
+              disabled={timelineLoading}
+              className="flex items-center gap-2 text-sm text-gray-500 hover:text-gray-900 transition-colors disabled:opacity-50"
             >
               <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" />
               </svg>
-              View activity timeline
+              {timelineLoading ? 'Loading…' : 'View activity timeline'}
             </button>
           </div>
         </div>
 
         <div className="sticky bottom-0 bg-white border-t border-gray-100 px-6 py-4 flex gap-3 justify-end">
-          <Button variant="secondary" onClick={onClose}>Cancel</Button>
-          <Button onClick={handleSave}>Save changes</Button>
+          <Button variant="secondary" onClick={onClose} disabled={saving}>Cancel</Button>
+          <Button onClick={handleSave} disabled={saving}>
+            {saving ? 'Saving…' : 'Save changes'}
+          </Button>
         </div>
       </SlideOver>
 
@@ -188,11 +202,8 @@ export function ClientSlideOver({ open, client, onClose, onSaved }: ClientSlideO
         open={timelineOpen}
         leadId={client?.leadId ?? ''}
         leadName={leadName}
-        entries={timelineEntries}
+        initialEntries={timelineEntries}
         onClose={() => setTimelineOpen(false)}
-        onEntriesChange={() => {
-          if (client) setTimelineEntries(getActivityEntries(client.leadId))
-        }}
       />
     </>
   )

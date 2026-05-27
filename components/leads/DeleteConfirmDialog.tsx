@@ -9,6 +9,7 @@ interface DeleteConfirmDialogProps {
   description: React.ReactNode
   onConfirm: () => void
   onCancel: () => void
+  loading?: boolean
 }
 
 export function DeleteConfirmDialog({
@@ -17,13 +18,16 @@ export function DeleteConfirmDialog({
   description,
   onConfirm,
   onCancel,
+  loading,
 }: DeleteConfirmDialogProps) {
   return (
     <Modal open={open} onClose={onCancel} title={title}>
       <p className="text-sm text-gray-600 mb-6">{description}</p>
       <div className="flex justify-end gap-3">
-        <Button variant="secondary" onClick={onCancel}>Cancel</Button>
-        <Button variant="danger" onClick={onConfirm}>Delete</Button>
+        <Button variant="secondary" onClick={onCancel} disabled={loading}>Cancel</Button>
+        <Button variant="danger" onClick={onConfirm} disabled={loading}>
+          {loading ? 'Deleting…' : 'Delete'}
+        </Button>
       </div>
     </Modal>
   )

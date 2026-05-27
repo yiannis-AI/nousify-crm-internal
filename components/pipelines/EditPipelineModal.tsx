@@ -5,7 +5,7 @@ import { Modal } from '@/components/ui/Modal'
 import { Button } from '@/components/ui/Button'
 import { DeleteConfirmDialog } from '@/components/leads/DeleteConfirmDialog'
 import type { Pipeline } from '@/types'
-import { updatePipeline, deletePipeline } from '@/lib/pipelines'
+import { updatePipelineAction, deletePipelineAction } from '@/app/actions/pipelines'
 
 interface EditPipelineModalProps {
   open: boolean
@@ -27,19 +27,19 @@ export function EditPipelineModal({ open, pipeline, onClose, onUpdated, onDelete
     }
   }, [open, pipeline])
 
-  function handleSubmit(e: React.FormEvent) {
+  async function handleSubmit(e: React.FormEvent) {
     e.preventDefault()
     const trimmedName = name.trim()
     if (!trimmedName) return
-    const updated = updatePipeline(pipeline.id, {
+    const updated = await updatePipelineAction(pipeline.id, {
       name: trimmedName,
       description: description.trim() || undefined,
     })
     onUpdated(updated)
   }
 
-  function handleDeleteConfirm() {
-    deletePipeline(pipeline.id)
+  async function handleDeleteConfirm() {
+    await deletePipelineAction(pipeline.id)
     setConfirmDelete(false)
     onDeleted(pipeline.id)
   }
